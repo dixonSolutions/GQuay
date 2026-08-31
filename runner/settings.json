@@ -1,0 +1,282 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+
+  "_comment": [
+    "GQuay runner overlay. The Router renders this per session into",
+    "data/sessions/<work-item>/settings.json, substituting ${...} placeholders,",
+    "and passes it with --settings. It is generated per session rather than",
+    "shared because the work item key and the inbox path differ per session.",
+    "",
+    "Do not hand-edit the generated copy — edit this template."
+  ],
+
+  "allowedHttpHookUrls": ["${HOOK_BUS_URL}/hooks/*"],
+  "httpHookAllowedEnvVars": ["HOOK_BUS_TOKEN"],
+
+  "permissions": {
+    "ask": [
+      "mcp__github__merge_pull_request"
+    ],
+    "_comment": [
+      "merge_pull_request is left in an ask-by-default permission so a dead Hook",
+      "Bus degrades to 'no merge' rather than 'free merge'. A PreToolUse hook",
+      "that times out does NOT block the call — it continues through the normal",
+      "permission flow — so the gate needs this floor underneath it.",
+      "",
+      "It is deliberately NOT in a deny rule: a hook returning 'allow' cannot",
+      "loosen a deny that came from settings, and that would kill the",
+      "'merge when asked' path entirely."
+    ]
+  },
+
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "${HOOK_BUS_URL}/hooks/session-start",
+            "headers": {
+              "Authorization": "Bearer $HOOK_BUS_TOKEN",
+              "X-GQuay-Work-Item": "${WORK_ITEM_KEY}"
+            },
+            "allowedEnvVars": ["HOOK_BUS_TOKEN"],
+            "timeout": 15,
+            "_comment": "http, not mcp_tool: SessionStart typically fires before MCP servers finish connecting."
+          }
+        ]
+      }
+    ],
+
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "gquay",
+            "tool": "await_events",
+            "input": { "timeout_s": ${PARK_TIMEOUT_S} },
+            "timeout": 600,
+            "statusMessage": "Parked — waiting for GitHub",
+            "_comment": [
+              "This is the park loop, and it is structural on purpose. An agent that",
+              "*forgets* to call await_events ends its turn and the session dies with",
+              "work outstanding, and 'remember to call the tool' is exactly the kind of",
+              "instruction that survives twenty turns and then does not.",
+              "",
+              "The tool's timeout_s is set below this hook's timeout so the server",
+              "returns 'nothing arrived' first and the turn ends deliberately. If the",
+              "hook itself times out, Claude Code cancels it and discards the output,",
+              "so no decision is rendered and the turn ends anyway — the failure mode",
+              "is 'session parks', not 'session hangs'."
+            ]
+          },
+          {
+            "type": "http",
+            "url": "${HOOK_BUS_URL}/hooks/turn-end",
+            "async": true,
+            "headers": {
+              "Authorization": "Bearer $HOOK_BUS_TOKEN",
+              "X-GQuay-Work-Item": "${WORK_ITEM_KEY}"
+            },
+            "allowedEnvVars": ["HOOK_BUS_TOKEN"]
+          }
+        ]
+      }
+    ],
+
+    "PreToolUse": [
+      {
+        "matcher": "mcp__github__merge_pull_request",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "${HOOK_BUS_URL}/hooks/merge-gate",
+            "timeout": 20,
+            "headers": {
+              "Authorization": "Bearer $HOOK_BUS_TOKEN",
+              "X-GQuay-Work-Item": "${WORK_ITEM_KEY}"
+            },
+            "allowedEnvVars": ["HOOK_BUS_TOKEN"],
+            "_comment": "PreToolUse fires before any permission-mode check, so this deny holds even under bypassPermissions."
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__gquay__(post|reply|ask)",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "${HOOK_BUS_URL}/hooks/comms-gate",
+            "timeout": 15,
+            "headers": {
+              "Authorization": "Bearer $HOOK_BUS_TOKEN",
+              "X-GQuay-Work-Item": "${WORK_ITEM_KEY}"
+            },
+            "allowedEnvVars": ["HOOK_BUS_TOKEN"]
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "${HOOK_BUS_URL}/hooks/edit-guard",
+            "timeout": 10,
+            "headers": {
+              "Authorization": "Bearer $HOOK_BUS_TOKEN",
+              "X-GQuay-Work-Item": "${WORK_ITEM_KEY}"
+            },
+            "allowedEnvVars": ["HOOK_BUS_TOKEN"],
+            "_comment": "agent-locks is advisory by design. This turns an overlap report into a permission decision."
+          }
+        ]
+      }
+    ],
+
+    "PostToolUse": [
+      {
+        "matcher": "mcp__github__(add_issue_comment|issue_write|pull_request_review_write|create_pull_request|merge_pull_request)",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "${HOOK_BUS_URL}/hooks/github-write",
+            "async": true,
+            "headers": {
+              "Authorization": "Bearer $HOOK_BUS_TOKEN",
+              "X-GQuay-Work-Item": "${WORK_ITEM_KEY}"
+            },
+            "allowedEnvVars": ["HOOK_BUS_TOKEN"],
+            "_comment": [
+              "async because a Teams post must never sit in front of the agent's next turn.",
+              "This is also where the linking rule lands: a create_pull_request response",
+              "gives the Router the PR number, and one session then owns both threads.",
+              "",
+              "MCP tools match as mcp__<server>__<tool>; a whole-server match needs the",
+              "'.*' suffix, since a bare prefix is compared as an exact string."
+            ]
+          }
+        ]
+      }
+    ],
+
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${RUNNER_DIR}/hooks/check-inbox.sh",
+            "args": [],
+            "async": true,
+            "asyncRewake": true,
+            "_comment": [
+              "Mid-task delivery. An agent parked in await_events is reachable through",
+              "the MCP call; an agent three files into a refactor is not. This reads the",
+              "work item's inbox file and, if a message is waiting, prints it to stderr",
+              "and exits 2 — which wakes Claude and surfaces it as a system reminder",
+              "without a restart."
+            ]
+          }
+        ]
+      }
+    ],
+
+    "Notification": [
+      {
+        "matcher": "agent_needs_input|idle_prompt|permission_prompt",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "${HOOK_BUS_URL}/hooks/needs-input",
+            "headers": {
+              "Authorization": "Bearer $HOOK_BUS_TOKEN",
+              "X-GQuay-Work-Item": "${WORK_ITEM_KEY}"
+            },
+            "allowedEnvVars": ["HOOK_BUS_TOKEN"],
+            "_comment": "Notification output and exit code are ignored — a pure observation point, which is what is wanted."
+          }
+        ]
+      }
+    ],
+
+    "StopFailure": [
+      {
+        "matcher": "rate_limit|billing_error|authentication_failed",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "${HOOK_BUS_URL}/hooks/agent-error",
+            "headers": {
+              "Authorization": "Bearer $HOOK_BUS_TOKEN",
+              "X-GQuay-Work-Item": "${WORK_ITEM_KEY}"
+            },
+            "allowedEnvVars": ["HOOK_BUS_TOKEN"]
+          }
+        ]
+      }
+    ],
+
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "${HOOK_BUS_URL}/hooks/pre-compact",
+            "timeout": 10,
+            "headers": {
+              "Authorization": "Bearer $HOOK_BUS_TOKEN",
+              "X-GQuay-Work-Item": "${WORK_ITEM_KEY}"
+            },
+            "allowedEnvVars": ["HOOK_BUS_TOKEN"],
+            "_comment": "Compaction eventually destroys the oldest context, and the oldest context here is the issue itself."
+          }
+        ]
+      }
+    ],
+
+    "PreModelSwitch": [
+      {
+        "matcher": "^(?!${MODEL}$).*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${RUNNER_DIR}/hooks/block-downgrade.sh",
+            "args": ["${MODEL}"],
+            "_comment": [
+              "PreModelSwitch can block a switch, and unlike other events a hook",
+              "cancelled at its timeout *blocks* the switch — so it fails closed by",
+              "default. The Router resolves the model at spawn from labels; drifting",
+              "mid-session would make the audit line in the transcript a lie."
+            ]
+          }
+        ]
+      }
+    ],
+
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "agent-locks",
+            "tool": "lock_finish",
+            "input": { "agent_id": "${WORK_ITEM_KEY}" },
+            "timeout": 10,
+            "_comment": "Locks have no TTL; without this a crashed agent holds its claim forever."
+          },
+          {
+            "type": "http",
+            "url": "${HOOK_BUS_URL}/hooks/session-end",
+            "headers": {
+              "Authorization": "Bearer $HOOK_BUS_TOKEN",
+              "X-GQuay-Work-Item": "${WORK_ITEM_KEY}"
+            },
+            "allowedEnvVars": ["HOOK_BUS_TOKEN"]
+          }
+        ]
+      }
+    ]
+  }
+}

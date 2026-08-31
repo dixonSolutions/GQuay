@@ -1,0 +1,36 @@
+[Unit]
+Description=GQuay Router
+Documentation=https://github.com/dixonSolutions/GQuay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gquay
+WorkingDirectory=/opt/gquay
+Environment=HOME=/home/gquay
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/gquay/.env
+ExecStart=/usr/bin/node /opt/gquay/dist/index.js
+Restart=on-failure
+RestartSec=3
+
+# Give parked MCP calls and SessionEnd hooks time to unwind. A session killed
+# before SessionEnd runs leaves its agent-locks claim held and its worktree on
+# disk, and nothing else cleans either up.
+KillSignal=SIGTERM
+TimeoutStopSec=45
+
+# Hardening. The Router holds the GitHub App key and every session's MCP bearer;
+# it should be able to write to its own data and worktrees and nothing else.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/opt/gquay/data /opt/gquay/worktrees /opt/gquay/mirrors
+
+[Install]
+WantedBy=multi-user.target

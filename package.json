@@ -1,0 +1,51 @@
+{
+  "name": "gquay",
+  "version": "0.1.0",
+  "description": "GitHub-driven Claude Code agent system \u2014 issues and PRs are the work queue, one agent session owns each work item, Teams is the human-facing channel",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "gquay": "./dist/cli.js",
+    "gquay-worker": "./dist/worker.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "nodemon",
+    "start": "NODE_ENV=production node dist/index.js",
+    "worker": "NODE_ENV=production node dist/worker.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "GQUAY_LOG_LEVEL=silent node --import tsx --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@fastify/websocket": "^11.0.2",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "better-sqlite3": "^12.10.1",
+    "dotenv": "^17.0.0",
+    "fastify": "^5.2.0",
+    "pino": "^9.6.0",
+    "ws": "^8.21.3",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "eslint": "^9.17.0",
+    "nodemon": "^3.1.11",
+    "pino-pretty": "^13.0.0",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "~5.7.2",
+    "typescript-eslint": "^8.18.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "esbuild@0.27.7": true,
+    "esbuild@0.28.2": true
+  }
+}

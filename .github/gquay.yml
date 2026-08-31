@@ -1,0 +1,140 @@
+# Per-repository GQuay configuration.
+#
+# This file is the tier that deserves review. It is versioned, it has blame
+# history, it supports nesting a flat key-value store does not, and a change to
+# it arrives as a `push` webhook — no polling. Anything a non-developer needs to
+# flip under pressure belongs in an Actions Variable instead (see
+# docs/06-configuration.md); everything structural belongs here.
+#
+# Precedence:  label on item > repo Variable > this file > org Variable > default
+
+enabled: true
+trigger_label: gquay
+
+model:
+  default: claude-opus-5
+  overrides:
+    label:model-sonnet: claude-sonnet-5
+    label:triage: claude-haiku-4-5-20251001
+
+# ── Channels ──────────────────────────────────────────────────────────────────
+#
+# The description is a prompt, not documentation. Four things, in this order:
+#   1. What belongs here, concretely.
+#   2. Who reads it and how fast — this is what sets the model's threshold.
+#   3. What response is expected: none / a decision / immediate action.
+#   4. What does *not* belong here, naming the better channel.
+#
+# The common failure is describing the *source* — "messages from the GitHub
+# agent" tells the model nothing, because every channel matches. Describe the
+# reader's obligation.
+
+channels:
+  activity:
+    name: "#gquay-activity"
+    description: >
+      The audit stream. Every issue picked up, PR opened, session parked.
+      Nobody watches this in real time; it exists so you can reconstruct what
+      happened. Nothing here ever needs a response.
+    do_not_use_for: "Anything a person needs to see today."
+    attention_cost: none
+    scopes: [mirror]          # the Hook Bus posts here; the agent cannot
+    threading: per_work_item
+
+  decisions:
+    name: "#gquay-needs-you"
+    description: >
+      Work is blocked on a human decision about a specific issue or PR. Read by
+      whoever is on the hook that day; expected response time is hours, not
+      days. Every message must end in a question with a clear recommended
+      default, so the reader can reply with one word.
+    do_not_use_for: "Progress updates, or anything you can decide yourself."
+    attention_cost: high
+    urgency_floor: high
+    scopes: [post, reply, ask, mention.assignee, escalate]
+    rate_limit: 6/hour
+    threading: per_work_item
+
+  incidents:
+    name: "#eng-alerts"
+    description: >
+      GQuay itself or the default branch is broken: auth failure, rate limit
+      exhausted, CI red on main. Someone is paged. Use this only when work
+      cannot continue and waiting will not fix it.
+    do_not_use_for: "Test failures inside a feature branch — that's your job to fix."
+    attention_cost: critical
+    urgency_floor: critical
+    scopes: [post, reply, mention.owner, attach, override_quiet_hours]
+    rate_limit: 3/hour
+
+  notes:
+    name: "#gquay-notes"
+    description: >
+      Things worth saying that nobody has to act on: a design tradeoff you
+      resolved one way, a bug outside this issue's scope, a dependency that
+      looks stale. Nobody is obliged to read this channel, which is exactly why
+      you can use it freely.
+    do_not_use_for: "Anything blocking. If you need an answer, use #gquay-needs-you."
+    attention_cost: low
+    scopes: [post]
+    rate_limit: 4/hour
+    quiet_hours: "18:00-08:00 Australia/Sydney"
+
+# ── Notification matrix ───────────────────────────────────────────────────────
+#
+# Every notification is a row. Adding one is a config edit, not a code change.
+
+teams:
+  thread_per_work_item: true
+  events:
+    # GitHub-side (the Router emits these)
+    issue.opened:          { notify: true,  severity: info }
+    issue.labeled.agent:   { notify: true,  severity: info }
+    issue.commented:       { notify: false }              # noisy; the agent mirrors what matters
+    issue.closed:          { notify: true,  severity: info }
+    issue.deleted:         { notify: true,  severity: warn }
+    issue.reopened:        { notify: true,  severity: info }
+    pr.opened:             { notify: true,  severity: info }
+    pr.review_requested:   { notify: true,  severity: info }
+    pr.review_submitted:   { notify: true,  severity: info }
+    pr.comment:            { notify: true,  severity: info }
+    pr.merged:             { notify: true,  severity: success }
+    pr.closed_unmerged:    { notify: true,  severity: warn }
+    ci.failed:             { notify: true,  severity: warn }
+
+    # Agent-side (hooks emit these)
+    gquay.started:         { notify: true,  severity: info }
+    gquay.commented:       { notify: true,  severity: info }
+    gquay.opened_pr:       { notify: true,  severity: success }
+    gquay.needs_input:     { notify: true,  severity: attention, mention: assignee }
+    gquay.idle_nudge:      { notify: true,  severity: attention }
+    gquay.merge_requested: { notify: true,  severity: attention, mention: assignee }
+    gquay.merge_blocked:   { notify: true,  severity: warn }
+    gquay.merged:          { notify: true,  severity: success }
+    gquay.error:           { notify: true,  severity: error,     mention: owner }
+    gquay.parked:          { notify: false }
+    gquay.voluntary:       { notify: true,  severity: info,      budget: 4/hour }
+
+coordination:
+  # Start with `notify`. The overlap test is biased toward false positives on
+  # purpose, so `queue` will sometimes queue work unnecessarily.
+  on_conflict: notify
+  scope_source: labels
+  stale_lock_after: 6h
+
+idle:
+  idle_grace: 10m
+  nudge_after: 20m
+  escalate_after: 2h
+  park_after: 24h
+
+guardrails:
+  protected_paths:
+    - .github/workflows/**
+    - router.yml
+  merge_requires_approval: true
+
+preamble: >
+  This repository is the GQuay Router itself. Changes to src/router/mergeGate.ts,
+  src/router/pushProxy.ts and runner/settings.json are security-relevant: say so
+  explicitly on the thread and expect a human review before you push.

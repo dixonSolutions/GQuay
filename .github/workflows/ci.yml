@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # The runner overlay is a template, not valid JSON on its own. A broken
+      # one means no park loop and no merge gate, so it is checked here rather
+      # than discovered at the first spawn.
+      - name: Validate the hook overlay template
+        run: |
+          node -e "
+            const fs = require('fs');
+            const rendered = fs.readFileSync('runner/settings.json', 'utf8')
+              .replace(/\\\$\{PARK_TIMEOUT_S\}/g, '540')
+              .replace(/\\\$\{[A-Z_]+\}/g, 'placeholder');
+            const parsed = JSON.parse(rendered);
+            const events = Object.keys(parsed.hooks);
+            for (const required of ['Stop', 'PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd']) {
+              if (!events.includes(required)) throw new Error('missing hook event: ' + required);
+            }
+            console.log('hook overlay renders and covers', events.length, 'events');
+          "
+
+      - name: Validate the example repo config
+        run: |
+          node -e "
+            const { parse } = require('yaml');
+            const fs = require('fs');
+            for (const f of ['.github/gquay.yml', 'router.example.yml']) {
+              parse(fs.readFileSync(f, 'utf8'));
+              console.log(f, 'parses');
+            }
+          "
+
+      - name: Check the hook scripts
+        run: bash -n runner/hooks/check-inbox.sh && bash -n runner/hooks/block-downgrade.sh

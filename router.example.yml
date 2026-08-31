@@ -1,0 +1,129 @@
+# GQuay Router — host configuration.
+#
+# Copy to router.yml and edit. This file is host infrastructure: it names
+# machines, images and token variables. Per-repository settings live in each
+# repo's .github/gquay.yml, which is versioned and reviewable; only the *routing
+# rules* belong here, because a repository that could choose its own execution
+# target could choose to run on a box it was never granted.
+#
+# Secrets are never in this file. See .env.example.
+
+# The origin GitHub delivers webhooks to, and the origin a cloud session must be
+# able to reach. Must be public HTTPS.
+public_url: https://gquay.example.com
+
+server:
+  port: 8080                 # ingress + MCP + worker socket; put TLS in front
+  host: 0.0.0.0
+  hook_bus_port: 8787        # loopback only — hook responses block tool calls
+  hook_bus_host: 127.0.0.1
+
+paths:
+  data: ./data
+  worktrees: ./worktrees
+  mirrors: ./mirrors
+  inbox: ./data/inbox
+  runner: ./runner           # the hook overlay template lives here
+
+github:
+  app_id: "123456"
+  private_key_path: ./gquay-app.private-key.pem
+  # The hard perimeter. The App installation decides which repos are reachable;
+  # this decides which of those GQuay will act on at all.
+  allowed_repos:
+    - "dixonSolutions/*"
+  api_base: https://api.github.com
+
+runner:
+  default: local
+  claude_bin: claude
+  max_concurrent_total: 8
+
+  targets:
+    # The default. One OS process per work item on the Router host.
+    local:
+      kind: process
+      workdir: ./worktrees
+      max_concurrent: 3
+
+    # A worker machine that dials out to the Router. Use this for code that must
+    # not leave a network — the Router never connects inbound.
+    kingspan-win:
+      kind: dispatch
+      labels: [windows, internal-net]
+      shell: powershell
+      max_concurrent: 2
+      worker_token_env: GQUAY_WORKER_TOKEN_KINGSPAN
+      provision:
+        isolation: worktree
+        mirror: C:\gquay\mirrors
+        setup: .gquay/setup.ps1
+        cache:
+          paths: [node_modules, .venv, "~/.nuget"]
+          key: "{{ hashFiles('package-lock.json') }}"
+          ttl: 7d
+        teardown: on_session_end
+
+    # Untrusted repos, dependency isolation, or simply more parallelism.
+    # `network` names a Docker network you created with an egress allowlist —
+    # the Router does not create it, because a network it could create is a
+    # network it could misconfigure under load.
+    sandbox:
+      kind: container
+      image: ghcr.io/dixonsolutions/gquay-runner:1
+      network: gquay-restricted
+      max_concurrent: 6
+
+    # The weakest target, and still useful for a self-contained issue on a
+    # public repo when every local slot is busy. It cannot park: the sandbox is
+    # created at session start and destroyed at the end, so this runs
+    # fire-and-forget and every later comment is a fresh spawn or a --resume.
+    #
+    # There is no documented API for launching a web session from a third-party
+    # process, so supply the launch argv yourself.
+    cloud:
+      kind: claude_cloud
+      max_concurrent: 2
+      parking: false
+      # launch_command:
+      #   ["claude", "--cloud", "--repo", "{{repo}}", "--branch", "{{branch}}",
+      #    "--model", "{{model}}", "--mcp-config", "{{mcp_config}}"]
+
+# First match wins; anything unmatched falls back to runner.default.
+routing:
+  - match: { repo: "kingspan/*" }
+    target: kingspan-win
+  - match: { label: "gquay:sandbox" }
+    target: sandbox
+  - match: { label: "gquay:cloud" }
+    target: cloud
+  - match: {}
+    target: local
+
+idle:
+  # Two distinct clocks. `idle` means the agent has nothing to do — normal, and
+  # it never escalates. `awaiting_input` means it is blocked on a person.
+  idle_grace_minutes: 10
+  nudge_after_minutes: 20
+  escalate_after_minutes: 120
+  park_after_hours: 24
+  # How long await_events holds a call before returning "nothing arrived". Keep
+  # this below the Stop hook's own timeout so the turn ends deliberately.
+  park_timeout_seconds: 540
+
+merge:
+  approval_ttl_minutes: 15
+  approval_phrase: "@gquay merge"
+
+coordination:
+  on_conflict: notify          # notify | queue | read_only | proceed
+  stale_lock_after_hours: 6
+  # agent-locks does not model case-sensitivity. Leave this on if any Windows
+  # worker touches a repo a Linux worker also touches.
+  normalise_case: true
+
+teams:
+  enabled: true
+  workflow_url_env: TEAMS_WORKFLOW_URL
+  thread_per_work_item: true
+  severity_floor: info

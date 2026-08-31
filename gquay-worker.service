@@ -1,0 +1,30 @@
+[Unit]
+Description=GQuay dispatch worker
+Documentation=https://github.com/dixonSolutions/GQuay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gquay
+WorkingDirectory=/opt/gquay-worker
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/gquay-worker/.env
+# The worker dials out. Nothing needs to reach it, which is the entire reason
+# this target exists — a build server inside a corporate network has no inbound
+# path, and this does not ask for one.
+ExecStart=/usr/bin/node /opt/gquay-worker/dist/worker.js \
+  --router wss://gquay.example.com/gquay/worker \
+  --labels internal-net \
+  --capacity 2 \
+  --workdir /var/lib/gquay-worker
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ReadWritePaths=/var/lib/gquay-worker
+
+[Install]
+WantedBy=multi-user.target
