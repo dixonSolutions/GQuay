@@ -18,7 +18,7 @@
     "worker": "NODE_ENV=production node dist/worker.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "GQUAY_LOG_LEVEL=silent node --import tsx --test \"test/**/*.test.ts\""
+    "test": "GQUAY_LOG_LEVEL=silent node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@fastify/websocket": "^11.0.2",
