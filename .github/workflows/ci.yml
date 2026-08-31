@@ -39,6 +39,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Reference docs drift silently — nothing breaks, they just quietly stop
+      # being true. This checks that links resolve and that everything the code
+      # enumerates is documented somewhere.
+      - name: Check documentation
+        run: npm run check:docs
+
       # The runner overlay is a template, not valid JSON on its own. A broken
       # one means no park loop and no merge gate, so it is checked here rather
       # than discovered at the first spawn.

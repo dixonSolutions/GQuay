@@ -107,3 +107,207 @@ Model: claude-opus-5. Comms scopes: notes:post decisions:post decisions:ask.
 ```
 
 Every transcript therefore records what the agent was actually running under, which is the only way to answer "why did it do that" a week later.
+
+---
+
+# Reference
+
+## `router.yml` — host configuration
+
+Validated by `RouterConfigSchema` in `src/config.ts`. Cross-field checks run at load, so a bad target or a routing rule pointing nowhere fails at boot rather than at the first spawn.
+
+### Top level
+
+| Key | Default | Notes |
+|---|---|---|
+| `public_url` | *required* | The origin GitHub delivers webhooks to, and that a cloud sandbox must be able to reach. Must be public HTTPS |
+
+### `server`
+
+| Key | Default | Notes |
+|---|---|---|
+| `port` | `8080` | Ingress + MCP + worker socket + push proxy. Put TLS in front |
+| `host` | `0.0.0.0` | |
+| `hook_bus_port` | `8787` | Loopback only — hook responses block tool calls |
+| `hook_bus_host` | `127.0.0.1` | Do not expose this |
+
+### `paths`
+
+All resolved to absolute at load, so nothing downstream depends on the working directory.
+
+| Key | Default |
+|---|---|
+| `data` | `./data` — SQLite, generated session configs |
+| `worktrees` | `./worktrees` |
+| `mirrors` | `./mirrors` — bare mirrors, one per repo |
+| `inbox` | `./data/inbox` — asyncRewake files |
+| `runner` | `./runner` — where the hook overlay template lives |
+
+### `github`
+
+| Key | Default | Notes |
+|---|---|---|
+| `app_id` | — | |
+| `private_key_path` | — | Falls back to `GITHUB_APP_PRIVATE_KEY` in the environment |
+| `allowed_repos` | `["*"]` | The hard perimeter, checked before anything else. `owner/*` globs span one path segment |
+| `api_base` | `https://api.github.com` | |
+
+### `runner`
+
+| Key | Default | Notes |
+|---|---|---|
+| `default` | `local` | Must name a defined target |
+| `claude_bin` | `claude` | |
+| `max_concurrent_total` | `8` | Ceiling across every target |
+| `targets` | *required* | See below |
+
+### `runner.targets.<name>`
+
+| Key | Applies to | Notes |
+|---|---|---|
+| `kind` | all | `process` \| `dispatch` \| `container` \| `claude_cloud` |
+| `max_concurrent` | all | Default `3` |
+| `labels` | dispatch | A worker must advertise all of them |
+| `parking` | all | Default `true`; **forced to `false`** for `claude_cloud` |
+| `workdir` | process | |
+| `shell` | dispatch | |
+| `image` | container | Required — validated at load |
+| `network` | container | A network you created, with its own egress allowlist |
+| `engine` | container | `docker` (default) or `podman` |
+| `worker_token_env` | dispatch | Env var holding the shared token. Missing value fails at load |
+| `launch_command` | claude_cloud | argv with `{{repo}}`, `{{branch}}`, `{{model}}`, `{{work_item}}`, `{{mcp_config}}`, `{{settings}}` |
+| `provision` | dispatch | `isolation`, `mirror`, `setup`, `cache.{paths,key,ttl}`, `teardown` |
+
+### `routing`
+
+An ordered list; first match wins, unmatched falls back to `runner.default`.
+
+```yaml
+routing:
+  - match: { repo: "kingspan/*" }     # repo | owner | label
+    target: kingspan-win
+  - match: {}
+    target: local
+```
+
+### `idle`
+
+| Key | Default | Notes |
+|---|---|---|
+| `idle_grace_minutes` | `10` | |
+| `nudge_after_minutes` | `20` | `awaiting_input` only |
+| `escalate_after_minutes` | `120` | `awaiting_input` only |
+| `park_after_hours` | `24` | Terminate an idle session to free the slot |
+| `park_timeout_seconds` | `540` | `await_events` window. Keep below the `Stop` hook's own timeout |
+
+### `merge`, `coordination`, `teams`
+
+| Key | Default |
+|---|---|
+| `merge.approval_ttl_minutes` | `15` |
+| `merge.approval_phrase` | `@gquay merge` |
+| `coordination.on_conflict` | `notify` — `notify` \| `queue` \| `read_only` \| `proceed` |
+| `coordination.stale_lock_after_hours` | `6` |
+| `coordination.normalise_case` | `true` — leave on if any Windows worker shares a repo with a Linux one |
+| `teams.enabled` | `true` |
+| `teams.workflow_url_env` | `TEAMS_WORKFLOW_URL` |
+| `teams.thread_per_work_item` | `true` |
+| `teams.severity_floor` | `info` — drops anything lower before it leaves the process |
+
+---
+
+## `.github/gquay.yml` — repository configuration
+
+Validated by `RepoConfigSchema` in `src/router/repoConfig.ts`. Parsed as a deep partial, so a file may set only what it overrides.
+
+| Key | Default | Notes |
+|---|---|---|
+| `enabled` | `true` | |
+| `trigger_label` | `gquay` | |
+| `model.default` | `claude-opus-5` | |
+| `model.overrides` | `{}` | Keyed `label:<name>` → model id |
+| `scopes` | `[]` | Extra grants beyond those implied by the channel registry |
+| `channels` | `{}` | See below. **No channel is granted by default** |
+| `teams.thread_per_work_item` | `true` | |
+| `teams.events` | `{}` | `{ notify, severity, mention?, budget? }` per event name |
+| `coordination.on_conflict` | `notify` | |
+| `coordination.scope_source` | `labels` | `labels` \| `paths_in_issue` \| `agent_declares` |
+| `coordination.stale_lock_after` | `6h` | |
+| `idle.idle_grace` | `10m` | |
+| `idle.nudge_after` | `20m` | |
+| `idle.escalate_after` | `2h` | |
+| `idle.park_after` | `24h` | |
+| `preamble` | `""` | Prepended to every spawn prompt — repo-specific house rules |
+| `guardrails.protected_paths` | `[]` | Wins over any lock state |
+| `guardrails.merge_requires_approval` | `true` | |
+| `guardrails.max_files_changed` | — | |
+| `routing.preferred_target` | — | A *request*, honoured only if the target exists |
+
+### `channels.<key>`
+
+| Key | Default | Notes |
+|---|---|---|
+| `name` | *required* | The display name, e.g. `#gquay-needs-you` |
+| `description` | `""` | **This is a prompt.** See [05-comms](05-comms.md#writing-a-channel-description) |
+| `do_not_use_for` | `""` | Name the better channel |
+| `attention_cost` | `low` | `none` \| `low` \| `high` \| `critical` |
+| `urgency_floor` | `low` | `low` \| `normal` \| `high` \| `critical` |
+| `scopes` | `[]` | Capabilities from the vocabulary below. Unknown entries are dropped with a warning, never granted |
+| `rate_limit` | — | `6/hour`, `2/min`, `30/day` |
+| `threading` | `flat` | `per_work_item` \| `flat` |
+| `quiet_hours` | — | `18:00-08:00 Australia/Sydney`. Windows may wrap midnight |
+
+Capabilities: `mirror`, `post`, `reply`, `ask`, `read`, `mention.assignee`, `mention.owner`, `mention.channel`, `attach`, `escalate`, `override_quiet_hours`.
+
+### Durations and rates
+
+Durations are `\d+(s|m|h|d)` — `90s`, `20m`, `2h`, `7d`. Unparseable values fall back to the built-in default rather than to zero.
+
+Rates are `<n>/(min|hour|day)`. Unparseable means no limit.
+
+---
+
+## Environment — Tier 1
+
+| Variable | Required | Notes |
+|---|---|---|
+| `GITHUB_WEBHOOK_SECRET` | **yes** | Must match the App's webhook secret |
+| `HOOK_BUS_TOKEN` | **yes** | Bearer for the loopback hook listener |
+| `ANTHROPIC_API_KEY` | in practice | A Console key with its own spend controls |
+| `GITHUB_APP_PRIVATE_KEY` | if not using `private_key_path` | |
+| `TEAMS_WORKFLOW_URL` | if Teams is enabled | The whole URL is a credential |
+| `GQUAY_WORKER_TOKEN_*` | per dispatch target | Named by that target's `worker_token_env` |
+| `GQUAY_LOG_LEVEL` | no | `trace` … `silent` |
+| `GQUAY_CONFIG` | no | Path to `router.yml` |
+| `GQUAY_ROOT` | no | Base for relative paths |
+
+---
+
+## Actions Variables — Tier 2
+
+Scalars: `GQUAY_ENABLED`, `GQUAY_TRIGGER_LABEL`, `GQUAY_DEFAULT_MODEL`, `GQUAY_IDLE_NUDGE_MINUTES`, `GQUAY_IDLE_PARK_HOURS`.
+
+JSON overlays, all requiring `"v":1`:
+
+| Variable | Shape |
+|---|---|
+| `GQUAY_MODEL_MAP` | `{"v":1,"default":"…","label:model-sonnet":"…"}` |
+| `GQUAY_SCOPE_OVERRIDES` | `{"v":1,"notes":[],"decisions":["post","ask"]}` |
+| `GQUAY_QUIET_HOURS` | `{"v":1,"tz":"…","window":"18:00-08:00","exempt":["incidents"]}` |
+
+A malformed overlay is logged, alerted, and ignored — the previous value keeps serving. It never fails open.
+
+---
+
+## Labels — Tier 4
+
+| Label | Effect |
+|---|---|
+| `gquay` | The trigger label (configurable) |
+| `model:opus` \| `model:sonnet` \| `model:haiku` | Model for this item only |
+| `gquay:read-only` | Investigate and comment; every scope but `notes:post` is stripped |
+| `gquay:quiet` | Strips `post` and `ask` everywhere but `notes` |
+| `gquay:no-teams` | Turns off every notification row |
+| `gquay:sandbox` \| `gquay:cloud` | Route to that target |
+| `priority:high` | `nudge_after` → 5m, `escalate_after` → 30m |
+| `area:<name>` | Declares `<name>/**` as the scope for the pre-spawn conflict check |
