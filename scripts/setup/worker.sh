@@ -125,9 +125,18 @@ if [ "$INSTALL_SERVICE" = "1" ]; then
   chown -R "$SERVICE_USER:$SERVICE_USER" "$PREFIX" "$WORKDIR"
 
   step "systemd"
+
+  # $HOME must be real and writable — Claude Code stores its credential and the
+  # session transcripts `--resume` reads under $HOME/.claude.
+  USER_HOME="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"
+  [ -n "$USER_HOME" ] || USER_HOME="/home/$SERVICE_USER"
+  mkdir -p "$USER_HOME"
+  chown "$SERVICE_USER:$SERVICE_USER" "$USER_HOME"
+
   sed -e "s|/opt/gquay-worker|$PREFIX|g" \
       -e "s|/var/lib/gquay-worker|$WORKDIR|g" \
       -e "s|User=gquay|User=$SERVICE_USER|" \
+      -e "s|/home/gquay|$USER_HOME|g" \
       -e "s|wss://gquay.example.com/gquay/worker|${ROUTER_URL%/}/gquay/worker|" \
       -e "s|--labels internal-net|--labels $LABELS|" \
       -e "s|--capacity 2|--capacity $CAPACITY|" \
@@ -136,8 +145,16 @@ if [ "$INSTALL_SERVICE" = "1" ]; then
   systemctl daemon-reload
   ok "gquay-worker.service installed"
 
+  systemctl enable gquay-worker >/dev/null 2>&1 && ok "enabled at boot"
+  if systemctl restart gquay-worker && sleep 2 && systemctl is-active --quiet gquay-worker; then
+    ok "gquay-worker.service is running"
+  else
+    warn "gquay-worker.service is not active — see: journalctl -u gquay-worker -n 50"
+  fi
+
   step "Ready"
-  say "  systemctl enable --now gquay-worker && journalctl -u gquay-worker -f"
+  say "  systemctl status gquay-worker    # running now, and at boot"
+  say "  journalctl -u gquay-worker -f    # follow it"
   say ""
   note "On the Router, confirm it attached:  gquay status  → \"workers\": 1"
 else

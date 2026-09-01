@@ -156,6 +156,26 @@ export async function removeWorktree(
   log.info({ workItemKey, path }, 'worktree removed');
 }
 
+/**
+ * Point a worktree's push remote at the branch-scoped proxy.
+ *
+ * This has to be a *worktree-local* setting. Every worktree of a repository
+ * shares the mirror's `config`, so a plain `remote.origin.pushurl` written by
+ * one work item is silently overwritten by the next one on the same repo — and
+ * each session's proxy URL carries its own session token, so the loser would
+ * push with someone else's credential or fail outright. `extensions.worktreeConfig`
+ * is git's own mechanism for exactly this, and it is enabled on the shared
+ * config (which is where it must live) before the per-worktree value is set.
+ *
+ * Only the *push* URL is redirected. Fetches still go straight to the mirror,
+ * which is faster and needs no credential at all.
+ */
+export async function pointPushRemote(worktree: string, url: string): Promise<void> {
+  await git(['config', 'extensions.worktreeConfig', 'true'], worktree);
+  await git(['config', '--worktree', 'remote.origin.pushurl', url], worktree);
+  log.debug({ worktree }, 'push remote pointed at branch-scoped proxy');
+}
+
 /** Branch name for a work item. Matches what the push proxy will authorise. */
 export function branchFor(workItemKey: string): string {
   const [kind, rest] = workItemKey.split(':');

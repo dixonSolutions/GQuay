@@ -40,16 +40,13 @@ import { tryApprove } from './mergeGate.js';
 import { resolveGrants } from '../mcp/comms.js';
 import { frameEvents } from '../mcp/framing.js';
 import { readLocks, findConflicts, describeLock } from '../mcp/locks.js';
-import { ensureMirror, ensureWorktree, removeWorktree, branchFor, gitCommonDir, mirrorPath } from '../git.js';
+import { ensureMirror, ensureWorktree, removeWorktree, branchFor, gitCommonDir, mirrorPath, pointPushRemote } from '../git.js';
 import * as registry from '../state/registry.js';
 import type { WorkItem, WorkItemRef } from '../state/registry.js';
 import { enqueue } from '../state/events.js';
 import type { DeliveredEvent, EventKind } from '../state/events.js';
 import { deposit, inboxPath } from '../state/inbox.js';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 
-const exec = promisify(execFile);
 const log = childLogger('router');
 
 /** Permission levels the Router will act on at all. */
@@ -506,6 +503,14 @@ export class Router {
       // Working, not parked — reachable only between tool calls. The inbox file
       // is read by the asyncRewake hook, which exits 2 and surfaces this as a
       // system reminder mid-task.
+      //
+      // On a dispatch target that file is on the *worker*, so the line is
+      // pushed down the control connection instead. Depositing locally there
+      // would write a file nothing ever reads.
+      if (this.plane.deliverInbox(target.key, delivered)) {
+        log.info({ workItem: item.key }, 'inbox line pushed to dispatch worker');
+        return 'deliver';
+      }
       deposit(this.opts.config.paths.inbox, item.key, delivered);
       log.info({ workItem: item.key }, 'deposited to inbox for asyncRewake');
       return 'deliver';
@@ -657,6 +662,7 @@ export class Router {
       mcpUrl: `${config.public_url.replace(/\/$/, '')}/mcp`,
       githubToken,
       scopes,
+      pushRemoteUrl: proxyRemoteUrl(config.public_url, mcpToken, ref.repo),
       env: {
         GQUAY_INBOX_FILE: inboxPath(config.paths.inbox, key),
         GQUAY_PARK_TIMEOUT_S: String(config.idle.park_timeout_seconds),
@@ -700,6 +706,7 @@ export class Router {
       mcpUrl: `${this.opts.config.public_url.replace(/\/$/, '')}/mcp`,
       githubToken,
       scopes: registry.grantedScopes(item),
+      pushRemoteUrl: proxyRemoteUrl(this.opts.config.public_url, mcpToken, item.repo),
       resumeSessionId: item.session_id,
       env: {
         GQUAY_INBOX_FILE: inboxPath(this.opts.config.paths.inbox, item.key),
@@ -793,8 +800,7 @@ export class Router {
   private async pointOriginAtProxy(worktree: string, repo: string, token: string): Promise<void> {
     const url = proxyRemoteUrl(this.opts.config.public_url, token, repo);
     try {
-      await exec('git', ['remote', 'set-url', '--push', 'origin', url], { cwd: worktree });
-      log.debug({ worktree, repo }, 'push remote pointed at branch-scoped proxy');
+      await pointPushRemote(worktree, url);
     } catch (err) {
       // A worktree whose push URL is wrong is a worktree that can push to main.
       // Better to fail the spawn than to run without the guard.

@@ -37,6 +37,12 @@ export interface SpawnRequest {
   githubToken: string;
   /** Resolved comms scope grants. */
   scopes: string[];
+  /**
+   * Branch-scoped push proxy URL for this session's `origin` push remote.
+   * Set for every target with a local checkout. The Router points the worktree
+   * at it directly; a dispatch worker is told the URL and does it itself.
+   */
+  pushRemoteUrl?: string;
   /** Set to continue an existing transcript rather than start fresh. */
   resumeSessionId?: string;
   /** Extra environment for the runner process. */

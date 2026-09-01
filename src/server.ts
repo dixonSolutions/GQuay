@@ -11,7 +11,8 @@
  * Route groups:
  *   POST /gquay/webhook        GitHub deliveries (HMAC verified, deduped)
  *   ALL  /mcp                  MCP Streamable HTTP — where await_events parks
- *   GET  /gquay/worker         dispatch worker WebSocket (workers dial out)
+ *   GET  /gquay/worker         dispatch worker WebSocket (workers dial out,
+ *                              and their sessions' hooks tunnel back through it)
  *   ALL  /git/:token/...       branch-scoped push proxy
  *   GET  /healthz              unauthenticated liveness
  *   GET  /gquay/status         authenticated overview
@@ -39,9 +40,18 @@ export interface ServerOptions {
   router: Router;
   webhookSecret: string;
   hookBusToken: string;
+  /**
+   * The loopback Hook Bus. Hooks from a dispatch worker's sessions arrive over
+   * the worker socket and are injected straight into it — no network hop, and
+   * the privileged hook surface stays unexposed. See `handleTunnelledHook`.
+   */
+  hookBus: FastifyInstance;
   host: string;
   port: number;
 }
+
+/** Hook paths the tunnel will forward. Anything else is refused. */
+const HOOK_PATH = /^\/hooks\/[A-Za-z0-9._-]+$/;
 
 interface McpSession {
   transport: StreamableHTTPServerTransport;
@@ -283,6 +293,11 @@ export function buildServer(opts: ServerOptions): FastifyInstance {
         return;
       }
 
+      if (msg.type === 'hook') {
+        void handleTunnelledHook(opts, msg, workerId!, (m) => send(socket, m));
+        return;
+      }
+
       router.onWorkerMessage(msg);
     });
 
@@ -337,6 +352,65 @@ export function buildServer(opts: ServerOptions): FastifyInstance {
 
 function send(socket: { send: (data: string) => void }, message: RouterToWorker): void {
   socket.send(JSON.stringify(message));
+}
+
+/**
+ * Serve one Claude Code hook that arrived over a worker's control connection.
+ *
+ * Three things this deliberately does not trust:
+ *
+ *   1. **The path.** The agent picks the hook URL, so a tunnel that forwarded
+ *      anything would hand a session the Router's entire loopback API. Only
+ *      `/hooks/<name>` is forwarded.
+ *   2. **The Authorization header.** The real Hook Bus token never leaves this
+ *      host — sending it to every worker would put a Router-wide credential on
+ *      a machine inside someone else's network. The WebSocket is what
+ *      authenticates; the header is stamped here.
+ *   3. **The work item.** It is checked against the assignment table, so one
+ *      worker cannot answer as a session running on another.
+ */
+async function handleTunnelledHook(
+  opts: ServerOptions,
+  msg: Extract<WorkerToRouter, { type: 'hook' }>,
+  workerId: string,
+  reply: (message: RouterToWorker) => void,
+): Promise<void> {
+  const fail = (status: number, error: string): void =>
+    reply({ type: 'hook_result', id: msg.id, status, headers: {}, body: JSON.stringify({ error }) });
+
+  const path = msg.path.startsWith('/') ? msg.path : `/${msg.path}`;
+  if (!HOOK_PATH.test(path.split('?')[0] ?? '')) {
+    log.warn({ workerId, path }, 'worker tunnelled a non-hook path — refused');
+    return fail(404, 'not a hook path');
+  }
+
+  if (opts.router.workers.forWorkItem(msg.work_item)?.id !== workerId) {
+    log.warn({ workerId, workItem: msg.work_item }, 'worker tunnelled a hook for an item it does not hold');
+    return fail(403, 'work item is not assigned to this worker');
+  }
+
+  try {
+    const res = await opts.hookBus.inject({
+      method: msg.method.toUpperCase() as 'POST',
+      url: path,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${opts.hookBusToken}`,
+        'x-gquay-work-item': msg.work_item,
+      },
+      payload: msg.body,
+    });
+    reply({
+      type: 'hook_result',
+      id: msg.id,
+      status: res.statusCode,
+      headers: { 'content-type': res.headers['content-type']?.toString() ?? 'application/json' },
+      body: res.body,
+    });
+  } catch (err) {
+    log.error({ workerId, path, err: (err as Error).message }, 'tunnelled hook failed');
+    fail(500, 'hook bus error');
+  }
 }
 
 function bearer(header: unknown): string | undefined {

@@ -225,8 +225,12 @@ Without an explicit "no channel" option a model treats channel selection as mand
 
 ## The other two servers
 
-**`github`** — the official GitHub MCP server, run in Docker with an installation token and `GITHUB_TOOLSETS=repos,issues,pull_requests,actions`. The toolset is a real security control: `GITHUB_TOOLSETS` and `--exclude-tools` limit what exists at all, which is stronger than any prompt. Don't enable `code_security` or `projects` unless you use them.
+**`github`** — the official GitHub MCP server, run in Docker with an installation token and `GITHUB_TOOLSETS=repos,issues,pull_requests,actions`. The toolset is a real security control: it limits what exists at all, which is stronger than any prompt. Don't enable `code_security` or `projects` unless you use them.
+
+Note what the toolset does *not* buy you: `repos` includes push. The branch guarantee comes from the receive-pack proxy, not from here.
 
 **`agent-locks`** — launched with `AGENT_LOCKS_AGENT_ID` set to the work item key, so every claim traces back to an issue, a PR and a Teams thread. The agent uses `lock_create` / `lock_update` / `lock_finish` directly; GQuay wraps only the conflict check, because that is the one whose output has to become a permission decision.
 
 Each session's `mcp.json` is generated into `data/sessions/<work-item>/` at `0600` and never written inside the worktree — the worktree is a git checkout the agent could `git add -A` at any moment.
+
+On a dispatch worker the same file is written locally, by the same `writeSessionConfig` the Router uses, into the worker's own `config/` directory. The Router never ships it: the MCP bearer and the GitHub token are per session, and one config shared across a machine would mean one leaked worktree exposes all of them.

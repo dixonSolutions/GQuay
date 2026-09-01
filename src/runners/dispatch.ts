@@ -11,11 +11,20 @@
  *     |- hello    { token, worker_id, labels, capacity, os, shell }
  *     |- receive  { spawn work_item, model, branch, scopes, session_token }
  *     |- stream   { state, session_id, output, exit }
- *     `- proxy    { mcp }  -- the agent's MCP traffic, tunnelled home
+ *     |- hook     { method, path, body }  -- a Claude Code hook, tunnelled home
+ *     `- inbox    { line }  -- asyncRewake delivery, pushed to the worker
  *
- * MCP is proxied over the control connection rather than dialled separately:
- * one outbound connection per worker, no extra firewall rule, and the parked
- * `await_events` call rides the same socket that is already being heartbeated.
+ * **Hooks are tunnelled over this connection, and they have to be.** The Hook
+ * Bus binds to loopback on the Router host, because hook responses block tool
+ * calls and a merge gate must never queue behind a webhook retry storm. On a
+ * worker machine, loopback is not the Router. So the worker runs its own
+ * loopback listener, and every `/hooks/*` request the agent makes rides the
+ * socket that is already open and heartbeated — no second firewall rule, and
+ * the privileged hook surface is never exposed publicly.
+ *
+ * Without this the dispatch target silently loses every hook: no Stop-hook
+ * park, no merge gate, no PR linking, no lock release. It looks like it works
+ * right up until it matters.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -32,6 +41,16 @@ export type WorkerToRouter =
   | { type: 'output'; work_item: string; stream: 'stdout' | 'stderr'; line: string }
   | { type: 'exit'; work_item: string; code: number | null; signal: string | null }
   | { type: 'mcp'; id: string; work_item: string; payload: unknown }
+  | {
+      type: 'hook';
+      id: string;
+      work_item: string;
+      method: string;
+      /** Path only, always beginning `/hooks/` — the Router refuses anything else. */
+      path: string;
+      headers: Record<string, string>;
+      body: string;
+    }
   | { type: 'pong' };
 
 export type RouterToWorker =
@@ -49,11 +68,28 @@ export type RouterToWorker =
       mcp_url: string;
       github_token: string;
       scopes: string[];
+      /** Branch-scoped push proxy URL. The agent never holds a credential for `main`. */
+      push_remote_url?: string;
+      /**
+       * The spawn request's extra environment, verbatim. `GQUAY_INBOX_FILE`
+       * names a path on the *Router's* filesystem, so the worker drops it and
+       * substitutes its own — see `worker.ts`.
+       */
+      env: Record<string, string>;
       resume_session_id?: string;
       provision?: ProvisionSpec;
     }
   | { type: 'kill'; work_item: string; reason: string }
   | { type: 'mcp_result'; id: string; payload: unknown }
+  | {
+      type: 'hook_result';
+      id: string;
+      status: number;
+      headers: Record<string, string>;
+      body: string;
+    }
+  /** A mid-task delivery for the worker to append to its local inbox file. */
+  | { type: 'inbox'; work_item: string; line: string }
   | { type: 'ping' };
 
 export interface ProvisionSpec {
@@ -218,12 +254,28 @@ export class DispatchTarget implements ExecutionTarget {
       mcp_url: req.mcpUrl,
       github_token: req.githubToken,
       scopes: req.scopes,
+      env: req.env ?? {},
+      ...(req.pushRemoteUrl ? { push_remote_url: req.pushRemoteUrl } : {}),
       ...(req.resumeSessionId ? { resume_session_id: req.resumeSessionId } : {}),
       ...(this.opts.provision ? { provision: this.opts.provision } : {}),
     });
 
     log.info({ workItem: req.workItemKey, workerId: worker.id }, 'dispatched to worker');
     return handle;
+  }
+
+  /**
+   * Push a mid-task delivery to the worker holding this session.
+   *
+   * The asyncRewake hook reads a file, and on a dispatch target that file lives
+   * on the worker, not here. Returns false when the item is not on this target,
+   * so the caller can fall back to a local deposit.
+   */
+  deliverInbox(workItemKey: string, line: string): boolean {
+    const worker = this.opts.registry.forWorkItem(workItemKey);
+    if (!worker || !this.handles.has(workItemKey)) return false;
+    worker.send({ type: 'inbox', work_item: workItemKey, line });
+    return true;
   }
 
   /** Called by `server.ts` when a worker reports state or exit. */

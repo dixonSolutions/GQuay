@@ -3,17 +3,37 @@ Description=GQuay Router
 Documentation=https://github.com/dixonSolutions/GQuay
 After=network-online.target
 Wants=network-online.target
+# The Router spawns sessions that run `docker run` for the GitHub MCP server,
+# and the `container` execution target needs the daemon too. Harmless when
+# Docker is not installed — it is a soft ordering, not a requirement.
+After=docker.service
+# A crash loop should be visible as a failed unit rather than hidden behind an
+# endless restart. Five failures inside five minutes stops it and leaves the
+# reason in `systemctl status`.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=gquay
 WorkingDirectory=/opt/gquay
-Environment=HOME=/home/gquay
 Environment=NODE_ENV=production
+# Claude Code keeps its credential *and* its session transcripts under
+# $HOME/.claude. `--resume` reads those transcripts, so this has to be a real,
+# writable directory — see ProtectHome below.
+Environment=HOME=/home/gquay
 EnvironmentFile=/opt/gquay/.env
 ExecStart=/usr/bin/node /opt/gquay/dist/index.js
-Restart=on-failure
+
+# `systemctl reload gquay` drops the cached repo config. GitHub emits no webhook
+# when an Actions *Variable* changes, so without this the only ways to pick up
+# an edited GQUAY_ENABLED or GQUAY_MODEL_MAP are the HTTP endpoint or a restart —
+# and a restart kills every parked session. See docs/06-configuration.md.
+ExecReload=/usr/bin/node /opt/gquay/dist/cli.js refresh
+
+Restart=always
 RestartSec=3
+SyslogIdentifier=gquay
 
 # Give parked MCP calls and SessionEnd hooks time to unwind. A session killed
 # before SessionEnd runs leaves its agent-locks claim held and its worktree on
@@ -21,16 +41,37 @@ RestartSec=3
 KillSignal=SIGTERM
 TimeoutStopSec=45
 
-# Hardening. The Router holds the GitHub App key and every session's MCP bearer;
-# it should be able to write to its own data and worktrees and nothing else.
+# One socket per parked session, plus the worker connections and the git proxy.
+# The default 1024 is comfortably reachable at a few dozen concurrent sessions.
+LimitNOFILE=65535
+
+# ── Hardening ─────────────────────────────────────────────────────────────────
+#
+# The Router holds the GitHub App key and every session's MCP bearer; it should
+# be able to write to its own data, worktrees and mirrors, and nothing else.
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
 PrivateTmp=true
 ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectProc=invisible
 RestrictSUIDSGID=true
-ReadWritePaths=/opt/gquay/data /opt/gquay/worktrees /opt/gquay/mirrors
+RestrictRealtime=true
+LockPersonality=true
+UMask=0077
+
+# ProtectHome is deliberately OFF. It would make /home unreadable, and
+# $HOME/.claude is where the agent credential and every session transcript live —
+# with it on, sessions fail to authenticate and `--resume` finds nothing. The
+# home directory is granted explicitly instead, which is the narrow version of
+# what ProtectHome=true would have denied wholesale.
+ProtectHome=false
+ReadWritePaths=/opt/gquay/data /opt/gquay/worktrees /opt/gquay/mirrors /home/gquay
+
+# MemoryDenyWriteExecute is deliberately absent: Node's JIT needs W+X pages and
+# the unit will not start with it set. Do not "harden" it back in.
 
 [Install]
 WantedBy=multi-user.target

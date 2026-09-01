@@ -3,16 +3,23 @@ Description=GQuay dispatch worker
 Documentation=https://github.com/dixonSolutions/GQuay
 After=network-online.target
 Wants=network-online.target
+After=docker.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=gquay
 WorkingDirectory=/opt/gquay-worker
 Environment=NODE_ENV=production
+# Same reason as the Router unit: Claude Code stores its credential and its
+# session transcripts under $HOME/.claude, and `--resume` reads them.
+Environment=HOME=/home/gquay
 EnvironmentFile=/opt/gquay-worker/.env
 # The worker dials out. Nothing needs to reach it, which is the entire reason
 # this target exists — a build server inside a corporate network has no inbound
-# path, and this does not ask for one.
+# path, and this does not ask for one. Its sessions' hooks ride back up the
+# same connection, so no inbound rule is needed for those either.
 ExecStart=/usr/bin/node /opt/gquay-worker/dist/worker.js \
   --router wss://gquay.example.com/gquay/worker \
   --labels internal-net \
@@ -20,11 +27,32 @@ ExecStart=/usr/bin/node /opt/gquay-worker/dist/worker.js \
   --workdir /var/lib/gquay-worker
 Restart=always
 RestartSec=5
+SyslogIdentifier=gquay-worker
+
+# SessionEnd releases the agent-locks claim and triggers worktree GC, and on
+# this target that hook has to round-trip to the Router. Kill the worker too
+# early and the claim is held forever by a session that no longer exists.
+KillSignal=SIGTERM
+TimeoutStopSec=45
+
+LimitNOFILE=65535
 
 NoNewPrivileges=true
 ProtectSystem=strict
 PrivateTmp=true
-ReadWritePaths=/var/lib/gquay-worker
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+UMask=0077
+
+# Off for the same reason as the Router — see that unit. Node's JIT also rules
+# out MemoryDenyWriteExecute.
+ProtectHome=false
+ReadWritePaths=/var/lib/gquay-worker /home/gquay
 
 [Install]
 WantedBy=multi-user.target

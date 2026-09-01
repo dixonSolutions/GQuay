@@ -109,19 +109,32 @@ At minimum set `public_url` and `github.app_id`. Everything else has a working d
 node dist/cli.js doctor
 ```
 
-It checks the things that otherwise fail silently for hours: a private key that never loaded, a `public_url` GitHub cannot reach, a missing hook overlay (without which there is no park loop and no merge gate), a dispatch target no worker can attach to, Teams enabled with no URL so notifications vanish.
+It checks the things that otherwise fail silently for hours: a private key that never loaded, a `public_url` GitHub cannot reach, a missing hook overlay (without which there is no park loop and no merge gate), a dispatch target no worker can attach to, Teams enabled with no URL so notifications vanish, and — on Linux — whether the daemon is actually installed, enabled at boot and running.
 
-## 6. Run it
+## 6. Run it as a daemon
 
 ```bash
 sudo ./setup.sh router
-sudo systemctl enable --now gquay
-journalctl -u gquay -f
+```
+
+That installs the unit, enables it at boot, starts it, and reports whether it came up. There is no separate `systemctl enable --now` step — a Router that is installed but not running misses webhooks, and GitHub retries a delivery for a while and then gives up for good, so an install that stops one step short of a live daemon looks finished and is not.
+
+```bash
+systemctl status gquay        # running now, and at boot
+journalctl -u gquay -f        # follow it
 ```
 
 (`scripts/install.sh` still works and delegates here.)
 
-The unit sets `TimeoutStopSec=45` deliberately: a session killed before `SessionEnd` runs leaves its agent-locks claim held and its worktree on disk, and nothing else cleans either up.
+Three settings in the unit are load-bearing rather than boilerplate:
+
+- **`TimeoutStopSec=45`.** A session killed before `SessionEnd` runs leaves its agent-locks claim held and its worktree on disk, and nothing else cleans either up.
+- **`ProtectHome=false`, with the home directory in `ReadWritePaths`.** Claude Code keeps its credential *and* its session transcripts under `$HOME/.claude`, and `--resume` reads those transcripts. With `ProtectHome=true` sessions fail to authenticate and every resume finds nothing. The directory is granted explicitly instead — the narrow version of what would otherwise be denied wholesale.
+- **`ExecReload`.** `systemctl reload gquay` drops the cached repo config. GitHub emits **no webhook when an Actions Variable changes**, and a restart would kill every parked session, so this is how an edited `GQUAY_ENABLED` or `GQUAY_MODEL_MAP` is picked up. See [06-configuration](06-configuration.md).
+
+`MemoryDenyWriteExecute` is deliberately absent: Node's JIT needs W+X pages and the unit will not start with it set.
+
+A dispatch worker installs the same way, on its own machine — `sudo ./setup.sh worker --router wss://your-host` — and its unit carries the same `$HOME` and shutdown-grace reasoning.
 
 ## 7. First webhook
 

@@ -168,11 +168,35 @@ manual "Put the App private key where router.yml points:" \
 
 if [ "$INSTALL_SERVICE" = "1" ]; then
   step "systemd"
-  sed "s|/opt/gquay|$PREFIX|g; s|User=gquay|User=$SERVICE_USER|" \
+
+  # $HOME must be a real writable directory: Claude Code keeps its credential
+  # and its session transcripts under $HOME/.claude, and `--resume` reads them.
+  USER_HOME="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"
+  [ -n "$USER_HOME" ] || USER_HOME="/home/$SERVICE_USER"
+  mkdir -p "$USER_HOME"
+  chown "$SERVICE_USER:$SERVICE_USER" "$USER_HOME"
+
+  sed "s|/opt/gquay|$PREFIX|g; s|User=gquay|User=$SERVICE_USER|; s|/home/gquay|$USER_HOME|g" \
     "$ROOT/gquay.service" > /etc/systemd/system/gquay.service
   chmod 644 /etc/systemd/system/gquay.service
   systemctl daemon-reload
   ok "gquay.service installed"
+
+  # Enable and start it here rather than printing the command. A Router that is
+  # not running is a Router that misses webhooks, and GitHub does not replay
+  # them indefinitely — an install that stops one step short of a live daemon is
+  # an install that looks finished and is not.
+  systemctl enable gquay >/dev/null 2>&1 && ok "enabled at boot"
+  if systemctl restart gquay; then
+    sleep 2
+    if systemctl is-active --quiet gquay; then
+      ok "gquay.service is running"
+    else
+      warn "gquay.service started but is not active — see: journalctl -u gquay -n 50"
+    fi
+  else
+    warn "gquay.service failed to start — see: journalctl -u gquay -n 50"
+  fi
 fi
 
 # ── 6. Verify ─────────────────────────────────────────────────────────────────
@@ -182,7 +206,9 @@ if ( cd "$PREFIX" && node dist/cli.js doctor ); then
   say ""
   step "Ready"
   if [ "$INSTALL_SERVICE" = "1" ]; then
-    say "  systemctl enable --now gquay && journalctl -u gquay -f"
+    say "  systemctl status gquay        # running now, and at boot"
+    say "  journalctl -u gquay -f        # follow it"
+    say "  systemctl reload gquay        # drop cached repo config (Variables emit no webhook)"
   else
     say "  npm start"
   fi

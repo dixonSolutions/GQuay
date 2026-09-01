@@ -132,6 +132,20 @@ export class ExecutionPlane {
     return { target: fallback, reason: 'runner.default' };
   }
 
+  /**
+   * Push a mid-task inbox line to whichever dispatch worker holds this item.
+   *
+   * Returns false when the session is not on a dispatch target, in which case
+   * the inbox file is on this host and the caller writes it directly.
+   */
+  deliverInbox(workItemKey: string, event: unknown): boolean {
+    const line = JSON.stringify(event);
+    for (const target of this.targets.values()) {
+      if (target instanceof DispatchTarget && target.deliverInbox(workItemKey, line)) return true;
+    }
+    return false;
+  }
+
   /** Global admission control, on top of each target's own cap. */
   hasGlobalCapacity(): boolean {
     let used = 0;

@@ -168,7 +168,7 @@ cp .env.example .env
 node dist/cli.js doctor
 ```
 
-`doctor` checks the things that otherwise fail silently for hours: a private key that never loaded, a `public_url` GitHub can't reach, a missing hook overlay (without which there is no park loop and no merge gate), a dispatch target no worker can attach to, Teams enabled with no URL so notifications vanish.
+`doctor` checks the things that otherwise fail silently for hours: a private key that never loaded, a `public_url` GitHub can't reach, a missing hook overlay (without which there is no park loop and no merge gate), a dispatch target no worker can attach to, Teams enabled with no URL so notifications vanish, and whether the daemon is installed, enabled at boot and actually running.
 
 ```bash
 npm start
@@ -239,7 +239,9 @@ The Router is the control plane. *Where* a session runs is a separate, pluggable
 
 `parking` is what actually separates them. A target that can hold an `await_events` call for hours keeps one session alive across many GitHub events. A cloud sandbox is created at session start and destroyed at the end, so it runs fire-and-forget — the Router forces `parking: false` rather than trusting the config.
 
-**Dispatch is the interesting one.** The worker dials out to the Router and holds the connection open; the Router never connects to a worker. A corporate build server has no inbound path from your host and nobody is opening one — so the only thing needing a public address is the Router, which already has one for the webhook. MCP is proxied over that same connection, so there is no second firewall rule.
+**Dispatch is the interesting one.** The worker dials out to the Router and holds the connection open; the Router never connects to a worker. A corporate build server has no inbound path from your host and nobody is opening one — so the only thing needing a public address is the Router, which already has one for the webhook.
+
+The agent's **hooks ride that same connection**, and they have to: the Hook Bus is loopback-only on the Router, and on a worker machine loopback is not the Router. The worker runs its own loopback listener and tunnels each hook home, with the work item identified by a per-session bearer rather than by a header the agent controls. Without that, a worker session has no hooks at all — no park, no merge gate, no linking rule — which is a failure that looks like success until it matters.
 
 Targets live in `router.yml`, never in a repository's config: a target names a machine and a token, and a repo that could choose its own target could choose to run on a box it was never granted.
 

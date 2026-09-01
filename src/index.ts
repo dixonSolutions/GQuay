@@ -8,7 +8,7 @@
  *   4. Open the registry and run migrations
  *   5. Reconcile: nothing survived the restart, so mark live rows accordingly
  *   6. Build the Router (execution plane, parking lot, Teams, push proxy)
- *   7. Start the public server and the loopback Hook Bus
+ *   7. Start the loopback Hook Bus and the public server
  *   8. Start the idle supervisor
  *   9. Register graceful shutdown
  */
@@ -55,14 +55,8 @@ async function main(): Promise<void> {
 
   const router = new Router({ config, secrets, rootDir: process.cwd() });
 
-  const server = buildServer({
-    router,
-    webhookSecret: secrets.githubWebhookSecret,
-    hookBusToken: secrets.hookBusToken,
-    host: config.server.host,
-    port: config.server.port,
-  });
-
+  // The Hook Bus is built first: the public server injects dispatch workers'
+  // tunnelled hooks straight into it, so it has to exist to be handed over.
   const hookBus = buildHookBus({
     router,
     token: secrets.hookBusToken,
@@ -70,14 +64,25 @@ async function main(): Promise<void> {
     port: config.server.hook_bus_port,
   });
 
-  await server.listen({ host: config.server.host, port: config.server.port });
-  log.info({ host: config.server.host, port: config.server.port }, 'ingress + MCP listening');
+  const server = buildServer({
+    router,
+    webhookSecret: secrets.githubWebhookSecret,
+    hookBusToken: secrets.hookBusToken,
+    hookBus,
+    host: config.server.host,
+    port: config.server.port,
+  });
 
+  // Hook Bus first. A webhook that arrives before it is listening would spawn a
+  // session whose SessionStart hook has nothing to talk to.
   await hookBus.listen({ host: config.server.hook_bus_host, port: config.server.hook_bus_port });
   log.info(
     { host: config.server.hook_bus_host, port: config.server.hook_bus_port },
     'hook bus listening',
   );
+
+  await server.listen({ host: config.server.host, port: config.server.port });
+  log.info({ host: config.server.host, port: config.server.port }, 'ingress + MCP listening');
 
   const idle = new IdleSupervisor({ router });
   idle.start();

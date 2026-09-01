@@ -22,6 +22,8 @@ import * as registry from './state/registry.js';
 import { isPubliclyReachable } from './runners/cloud.js';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { platform } from 'node:os';
 
 const USAGE = `gquay — GitHub-driven Claude Code agent system
 
@@ -141,6 +143,11 @@ function doctor(): void {
     process.stdout.write('✓ runner hook overlay present\n');
   }
 
+  // The daemon itself. Every other check here can pass on a Router that is not
+  // running, and a Router that is not running silently misses webhooks — GitHub
+  // retries a delivery for a while and then gives up for good.
+  checkDaemon(problems, notes);
+
   // Agent credential. This is the check most likely to save a surprise invoice:
   // Claude Code ranks an API key above a subscription token, and under -p it uses
   // the key whenever present, without prompting.
@@ -189,6 +196,63 @@ function doctor(): void {
     process.stdout.write(`\nNo blocking problems${notes.length ? `, ${notes.length} note(s)` : ''}.\n`);
   } else {
     process.exitCode = 1;
+  }
+}
+
+/**
+ * Is the Router installed as a systemd daemon, enabled at boot, and up now?
+ *
+ * Silent when systemd is not the supervisor — a container, a Mac, or someone
+ * running `npm start` by hand are all legitimate, and reporting a missing unit
+ * as a problem there would be noise.
+ */
+function checkDaemon(problems: string[], notes: string[]): void {
+  if (platform() !== 'linux') return;
+
+  const systemctl = (...args: string[]): string | undefined => {
+    try {
+      return execFileSync('systemctl', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    } catch (err) {
+      // `is-enabled`/`is-active` exit non-zero to *report* a state, and the
+      // answer is still on stdout — "disabled" is an answer, not a failure.
+      const out = (err as { stdout?: string }).stdout;
+      return typeof out === 'string' && out.trim() ? out.trim() : undefined;
+    }
+  };
+
+  if (systemctl('--version') === undefined) return;
+
+  // `is-enabled` answers "not-found" (on stdout, with a non-zero exit) when no
+  // unit is installed. That is not a fault: a container, a dev checkout, or
+  // anything supervised by something other than systemd are all legitimate. Say
+  // what is missing and move on rather than reporting two blocking problems.
+  const enabled = systemctl('is-enabled', 'gquay');
+  if (enabled === undefined || enabled === 'not-found') {
+    notes.push(
+      'No gquay.service unit is installed. The Router is a long-running daemon — it needs a ' +
+        'supervisor that restarts it on failure and starts it at boot, or a missed webhook is ' +
+        'gone for good. Install one with `sudo ./setup.sh router`.',
+    );
+    return;
+  }
+
+  if (enabled === 'enabled') {
+    process.stdout.write('✓ gquay.service is enabled at boot\n');
+  } else {
+    problems.push(
+      `gquay.service is ${enabled}, so the Router will not come back after a reboot. ` +
+        'Fix with `systemctl enable gquay`.',
+    );
+  }
+
+  const active = systemctl('is-active', 'gquay');
+  if (active === 'active') {
+    process.stdout.write('✓ gquay.service is running\n');
+  } else {
+    problems.push(
+      `gquay.service is ${active ?? 'not running'} — webhooks are being missed right now. ` +
+        'See `journalctl -u gquay -n 50`.',
+    );
   }
 }
 
