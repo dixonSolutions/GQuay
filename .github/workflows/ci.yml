@@ -74,5 +74,16 @@ jobs:
             }
           "
 
-      - name: Check the hook scripts
-        run: bash -n runner/hooks/check-inbox.sh && bash -n runner/hooks/block-downgrade.sh
+      - name: Check the shell scripts
+        run: |
+          for f in setup.sh scripts/*.sh scripts/setup/*.sh runner/hooks/*.sh; do
+            bash -n "$f" || exit 1
+          done
+          # The front door must at least be able to describe itself.
+          ./setup.sh --list > /dev/null
+
+      - name: Check shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          # SC1091: sourced lib.sh is resolved at runtime, not by the linter.
+          shellcheck -e SC1091 setup.sh scripts/*.sh scripts/setup/*.sh runner/hooks/*.sh

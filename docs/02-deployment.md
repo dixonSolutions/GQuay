@@ -1,6 +1,40 @@
 # Deployment
 
+> **Before anything here:** if you only want an agent that reads an issue and opens a pull request, you do not need any of this. Run `./setup.sh action` and stop. See [00-start-smaller](00-start-smaller.md).
+
 GQuay needs a long-running host with a public HTTPS endpoint. That is the whole infrastructure requirement, and it is not negotiable — see [01-architecture](01-architecture.md) for why Actions cannot host it.
+
+## The setup scripts
+
+One front door, focused modules behind it. The hard part of setup is knowing *which* of four things you are setting up, on three different machines — so `./setup.sh` asks, then hands off.
+
+```bash
+./setup.sh              # interactive: asks what you are setting up
+./setup.sh --list       # show the profiles without running anything
+```
+
+| Profile | Runs on | Needs root | What it does |
+|---|---|---|---|
+| `./setup.sh action` | any repo | no | Installs the GitHub Action workflow and its secret. No server at all |
+| `./setup.sh secrets` | the Router host | no | Generates `.env`: webhook secret, hook bus token, agent credential, Teams URL |
+| `./setup.sh router` | the Router host | yes | Build, install to `/opt/gquay`, systemd unit, then runs `doctor` |
+| `./setup.sh worker` | a *different* machine | yes | Installs a dispatch worker that dials out to the Router |
+| `./setup.sh doctor` | anywhere installed | no | Checks an existing install, changes nothing |
+
+Every module also runs standalone and non-interactively, because two of them need root and root often means a provisioning pipeline rather than a person:
+
+```bash
+scripts/setup/action.sh  --repo owner/name --mode label --yes
+scripts/setup/secrets.sh --yes
+scripts/setup/router.sh  --prefix /opt/gquay --no-service --yes
+scripts/setup/worker.sh  --router wss://host --labels internal-net --yes
+```
+
+`--yes` takes every default and never blocks on a prompt. It cannot invent a credential, so it warns and carries on rather than half-configuring something.
+
+**What the scripts deliberately do not do:** create the GitHub App, create the Teams Workflow, or configure TLS. Each needs a decision only you can make, and each happens in a browser. The scripts print exactly what to do and wait — a setup script that pretends it can automate those is worse than one that stops and says so.
+
+The manual walkthrough below is what `./setup.sh router` automates. Read it if you want to know what the script is doing, or if you are installing by hand.
 
 ## What the host needs
 
@@ -80,10 +114,12 @@ It checks the things that otherwise fail silently for hours: a private key that 
 ## 6. Run it
 
 ```bash
-sudo ./scripts/install.sh
+sudo ./setup.sh router
 sudo systemctl enable --now gquay
 journalctl -u gquay -f
 ```
+
+(`scripts/install.sh` still works and delegates here.)
 
 The unit sets `TimeoutStopSec=45` deliberately: a session killed before `SessionEnd` runs leaves its agent-locks claim held and its worktree on disk, and nothing else cleans either up.
 
@@ -105,15 +141,19 @@ If nothing happens, check **Advanced → Recent Deliveries** on the App. A 401 i
 A worker runs where the code must stay. It **dials out**; nothing needs to reach it.
 
 ```bash
+sudo ./setup.sh worker --router wss://gquay.example.com --labels windows,internal-net
+```
+
+That builds, installs to `/opt/gquay-worker`, copies the agent credential from this checkout, and writes the systemd unit. To run one by hand instead:
+
+```bash
 node dist/worker.js \
   --router wss://gquay.example.com/gquay/worker \
   --token "$GQUAY_WORKER_TOKEN_KINGSPAN" \
   --labels windows,internal-net \
   --capacity 2 \
   --workdir /var/lib/gquay-worker
-```
-
-`gquay-worker.service` is the systemd equivalent. The token must match the value of the target's `worker_token_env` on the Router. See [03-execution-targets](03-execution-targets.md).
+``` The token must match the value of the target's `worker_token_env` on the Router. See [03-execution-targets](03-execution-targets.md).
 
 ---
 

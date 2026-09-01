@@ -249,3 +249,24 @@ test('the minimal example router.yml loads through the real schema', () => {
     process.env = saved;
   }
 });
+
+test('an env var that is present but empty is caught, not treated as absent', async () => {
+  const { resolveAgentAuth } = await import('../src/config.ts');
+  // Empty is falsy in JS but still wins its precedence slot in Claude Code, so
+  // the session authenticates with an empty credential and fails while the
+  // token you actually set is ignored. The most confusing possible failure.
+  const auth = resolveAgentAuth({
+    ANTHROPIC_API_KEY: '',
+    CLAUDE_CODE_OAUTH_TOKEN: 'a-real-token',
+  } as NodeJS.ProcessEnv);
+  assert.equal(auth.method, 'none');
+  assert.match(auth.problem ?? '', /set but empty/);
+  assert.match(auth.problem ?? '', /not the same as unsetting/);
+});
+
+test('an absent var is genuinely absent, not confused with an empty one', async () => {
+  const { resolveAgentAuth } = await import('../src/config.ts');
+  const auth = resolveAgentAuth({ CLAUDE_CODE_OAUTH_TOKEN: 'tok' } as NodeJS.ProcessEnv);
+  assert.equal(auth.method, 'subscription');
+  assert.equal(auth.problem, undefined);
+});

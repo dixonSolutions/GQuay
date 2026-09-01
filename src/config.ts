@@ -337,6 +337,26 @@ export interface AgentAuth {
  * error, and no way to tell from the outside except the invoice.
  */
 export function resolveAgentAuth(env: NodeJS.ProcessEnv = process.env): AgentAuth {
+  // A variable that is *present but empty* is falsy in JavaScript and still
+  // wins its precedence slot in Claude Code — it authenticates with an empty
+  // credential and fails, while the credential you actually set sits unused.
+  // This is the single most confusing way to misconfigure the Router, so it is
+  // detected explicitly rather than treated as absent.
+  const emptyButSet = (['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] as const).filter(
+    (name) => name in env && env[name] === '',
+  );
+  if (emptyButSet.length > 0) {
+    return {
+      method: 'none',
+      detail: `${emptyButSet.join(' and ')} set to an empty value`,
+      problem:
+        `${emptyButSet.join(' and ')} is set but empty. An empty value still wins its ` +
+        `precedence slot, so sessions authenticate with an empty credential and fail — ` +
+        `while whatever you actually configured is ignored. Comment the line out or ` +
+        `remove it; setting it to "" is not the same as unsetting it.`,
+    };
+  }
+
   const apiKey = env['ANTHROPIC_API_KEY'];
   const oauth = env['CLAUDE_CODE_OAUTH_TOKEN'];
   const gateway = env['ANTHROPIC_AUTH_TOKEN'];

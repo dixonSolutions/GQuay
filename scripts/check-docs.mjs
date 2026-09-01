@@ -103,6 +103,35 @@ for (const m of hookBus.matchAll(/app\.post\('(\/hooks\/[a-z-]+)'/g)) {
   if (!hookDoc.includes(endpoint)) fail(`docs/11-hooks.md does not mention the ${endpoint} hook`);
 }
 
+// ── 3. Setup profiles ─────────────────────────────────────────────────────────
+//
+// The menu in setup.sh and the list in the deployment doc drift apart the first
+// time someone adds a profile and updates only one of them.
+
+const setupSh = readFileSync('setup.sh', 'utf8');
+// Read the authoritative list from the dispatch `case`, not the help text —
+// the help text's column alignment is not a contract.
+const caseLine = /^\s*(action(?:\|\w+)+)\)/m.exec(setupSh);
+const declared = caseLine ? caseLine[1].split('|') : [];
+if (declared.length === 0) fail('setup.sh: could not find the profile dispatch case');
+const deployDoc = readFileSync('docs/02-deployment.md', 'utf8');
+
+for (const profile of declared) {
+  if (!existsSync(`scripts/setup/${profile}.sh`) && profile !== 'doctor') {
+    fail(`setup.sh offers "${profile}" but scripts/setup/${profile}.sh does not exist`);
+  }
+  if (!deployDoc.includes(`./setup.sh ${profile}`)) {
+    fail(`setup.sh offers "${profile}" but docs/02-deployment.md does not document \`./setup.sh ${profile}\``);
+  }
+}
+
+for (const file of readdirSync('scripts/setup').filter((f) => f.endsWith('.sh') && f !== 'lib.sh')) {
+  const name = file.replace(/\.sh$/, '');
+  if (!declared.includes(name)) {
+    fail(`scripts/setup/${file} exists but setup.sh does not offer "${name}"`);
+  }
+}
+
 // ── Result ────────────────────────────────────────────────────────────────────
 
 if (failures > 0) {
@@ -111,5 +140,6 @@ if (failures > 0) {
 }
 console.log(
   `Docs OK — ${links} internal links resolve, ` +
-    `${tools.length} tools, ${capabilities.length} capabilities and every endpoint are documented.`,
+    `${tools.length} tools, ${capabilities.length} capabilities, ${declared.length} setup ` +
+    `profiles and every endpoint are documented.`,
 );

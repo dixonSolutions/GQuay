@@ -146,14 +146,25 @@ cd GQuay && npm install && npm run build
 ```
 
 ```bash
+./setup.sh
+```
+
+One front door, focused modules behind it — it asks which of the four things you are setting up, then hands off. `./setup.sh --list` shows them without running anything, and every module also runs standalone and non-interactively for provisioning:
+
+| | |
+|---|---|
+| `./setup.sh action` | the GitHub Action — no server at all |
+| `./setup.sh secrets` | generate `.env` for this checkout |
+| `./setup.sh router` | build, install, systemd (needs root) |
+| `./setup.sh worker` | a dispatch worker, on another machine |
+| `./setup.sh doctor` | check an install without changing it |
+
+To do it by hand instead:
+
+```bash
 cp router.example.yml router.yml
 cp .env.example .env
 ./scripts/gen-secrets.sh >> .env && chmod 600 .env
-```
-
-Edit `router.yml` — at minimum `public_url` and `github.app_id` — then:
-
-```bash
 node dist/cli.js doctor
 ```
 
