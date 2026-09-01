@@ -16,7 +16,7 @@ label on item  >  repo Variable  >  repo gquay.yml  >  org Variable  >  built-in
 
 | Value | Why here |
 |---|---|
-| `ANTHROPIC_API_KEY` | unreadable from GitHub; needed at spawn |
+| `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` | the agent credential; unreadable from GitHub, needed at spawn |
 | GitHub App private key | bootstraps GitHub access itself |
 | `TEAMS_WORKFLOW_URL` | the `sig` query parameter is a credential |
 | `HOOK_BUS_TOKEN` | local only |
@@ -273,7 +273,8 @@ Rates are `<n>/(min|hour|day)`. Unparseable means no limit.
 |---|---|---|
 | `GITHUB_WEBHOOK_SECRET` | **yes** | Must match the App's webhook secret |
 | `HOOK_BUS_TOKEN` | **yes** | Bearer for the loopback hook listener |
-| `ANTHROPIC_API_KEY` | in practice | A Console key with its own spend controls |
+| `CLAUDE_CODE_OAUTH_TOKEN` | one of these two | Subscription-backed, from `claude setup-token`. One-year lifetime |
+| `ANTHROPIC_API_KEY` | one of these two | A Console key with its own spend controls. **Outranks the token above** — set only one |
 | `GITHUB_APP_PRIVATE_KEY` | if not using `private_key_path` | |
 | `TEAMS_WORKFLOW_URL` | if Teams is enabled | The whole URL is a credential |
 | `GQUAY_WORKER_TOKEN_*` | per dispatch target | Named by that target's `worker_token_env` |

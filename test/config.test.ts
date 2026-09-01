@@ -172,3 +172,61 @@ test('permanent routing failures are not retried, transient ones are', async () 
     assert.equal(isTransient(new Error(message)), true, message);
   }
 });
+
+// ── Agent credential resolution ───────────────────────────────────────────────
+
+test('a subscription token alone resolves to the subscription', async () => {
+  const { resolveAgentAuth } = await import('../src/config.ts');
+  const auth = resolveAgentAuth({ CLAUDE_CODE_OAUTH_TOKEN: 'tok' } as NodeJS.ProcessEnv);
+  assert.equal(auth.method, 'subscription');
+  assert.equal(auth.problem, undefined);
+});
+
+test('an API key alongside a subscription token is flagged, not silently accepted', async () => {
+  const { resolveAgentAuth } = await import('../src/config.ts');
+  // This is the trap: Claude Code ranks ANTHROPIC_API_KEY above
+  // CLAUDE_CODE_OAUTH_TOKEN and uses it unconditionally under -p, so the
+  // subscription token is ignored and every session bills to the Console org.
+  const auth = resolveAgentAuth({
+    ANTHROPIC_API_KEY: 'sk-ant-x',
+    CLAUDE_CODE_OAUTH_TOKEN: 'tok',
+  } as NodeJS.ProcessEnv);
+  assert.equal(auth.method, 'api_key', 'the key wins, matching Claude Code precedence');
+  assert.match(auth.problem ?? '', /outranks the subscription token/);
+});
+
+test('a gateway bearer outranks both, and says so', async () => {
+  const { resolveAgentAuth } = await import('../src/config.ts');
+  const auth = resolveAgentAuth({
+    ANTHROPIC_AUTH_TOKEN: 'bearer',
+    CLAUDE_CODE_OAUTH_TOKEN: 'tok',
+  } as NodeJS.ProcessEnv);
+  assert.equal(auth.method, 'api_key');
+  assert.match(auth.problem ?? '', /gateway bearer outranks/);
+});
+
+test('a cloud provider selection wins over everything', async () => {
+  const { resolveAgentAuth } = await import('../src/config.ts');
+  const auth = resolveAgentAuth({
+    CLAUDE_CODE_USE_BEDROCK: '1',
+    ANTHROPIC_API_KEY: 'sk-ant-x',
+  } as NodeJS.ProcessEnv);
+  assert.equal(auth.method, 'cloud_provider');
+});
+
+test('no credential at all is a blocking problem, not a warning', async () => {
+  const { resolveAgentAuth } = await import('../src/config.ts');
+  const auth = resolveAgentAuth({} as NodeJS.ProcessEnv);
+  assert.equal(auth.method, 'none');
+  assert.match(auth.problem ?? '', /No agent credential/);
+});
+
+test('every agent credential var is forwarded to container targets', async () => {
+  const { AGENT_AUTH_ENV_VARS } = await import('../src/config.ts');
+  for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN']) {
+    assert.ok(
+      (AGENT_AUTH_ENV_VARS as readonly string[]).includes(name),
+      `${name} must reach the container, or a session starts with no credential`,
+    );
+  }
+});

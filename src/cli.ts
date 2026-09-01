@@ -15,7 +15,7 @@
 
 import 'dotenv/config';
 
-import { loadConfig } from './config.js';
+import { loadConfig, resolveAgentAuth } from './config.js';
 import { initLogger } from './log.js';
 import { openDb, closeDb } from './state/db.js';
 import * as registry from './state/registry.js';
@@ -139,6 +139,17 @@ function doctor(): void {
     );
   } else {
     process.stdout.write('✓ runner hook overlay present\n');
+  }
+
+  // Agent credential. This is the check most likely to save a surprise invoice:
+  // Claude Code ranks an API key above a subscription token, and under -p it uses
+  // the key whenever present, without prompting.
+  const auth = resolveAgentAuth();
+  if (auth.method === 'none') {
+    problems.push(auth.problem!);
+  } else {
+    process.stdout.write(`✓ agent credential: ${auth.detail}\n`);
+    if (auth.problem) notes.push(auth.problem);
   }
 
   // Teams

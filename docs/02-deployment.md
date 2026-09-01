@@ -50,7 +50,14 @@ This is the fail-safe backstop for the merge gate. The hook gate is the primary 
 chmod 600 .env
 ```
 
-Fill in `ANTHROPIC_API_KEY` and `TEAMS_WORKFLOW_URL`. See [06-configuration](06-configuration.md) for why these cannot live in GitHub Actions Secrets.
+Fill in the agent credential and `TEAMS_WORKFLOW_URL`. See [06-configuration](06-configuration.md) for why these cannot live in GitHub Actions Secrets.
+
+For the agent credential, set **exactly one** of:
+
+- `CLAUDE_CODE_OAUTH_TOKEN` — run `claude setup-token`, approve in the browser, and copy the one-year token it prints. Backed by your Claude subscription; right for personal automation on your own repositories.
+- `ANTHROPIC_API_KEY` — a Console key with its own billing and spend controls; right when GQuay serves a team.
+
+Setting both is worse than setting neither: the API key silently wins and the subscription token is ignored. `gquay doctor` will tell you which one is actually in play. See [08-security](08-security.md#the-precedence-trap).
 
 On auth choice: a Max-plan OAuth token works for personal automation, but this pipeline routes *other people's* requests through one person's seat and runs on shared infrastructure. Use a Console API key with its own billing and spend controls. Settle that before building.
 

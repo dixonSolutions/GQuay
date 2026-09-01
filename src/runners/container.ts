@@ -17,6 +17,7 @@
 import { spawn } from 'node:child_process';
 import { childLogger } from '../log.js';
 import { writeSessionConfig, claudeArgs, baseEnv } from './session.js';
+import { AGENT_AUTH_ENV_VARS } from '../config.js';
 import type { SessionConfigOptions } from './session.js';
 import { wireStreams } from './process.js';
 import type { Capacity, ExecutionTarget, RunnerHandle, SpawnRequest } from './types.js';
@@ -66,6 +67,14 @@ export class ContainerTarget implements ExecutionTarget {
 
     const env = baseEnv(req);
     const envArgs = Object.keys(env).flatMap((k) => ['-e', k]);
+    // `-e NAME` (no value) forwards the value from this process's environment,
+    // so the auth vars must actually be present in the spawn env below.
+    const authEnv = Object.fromEntries(
+      AGENT_AUTH_ENV_VARS.filter((name) => process.env[name]).map((name) => [
+        name,
+        process.env[name] as string,
+      ]),
+    );
 
     const args = [
       'run', '--rm', '-i',
@@ -78,7 +87,11 @@ export class ContainerTarget implements ExecutionTarget {
       '-w', '/work',
       ...(this.opts.network ? ['--network', this.opts.network] : []),
       ...envArgs,
-      ...(process.env['ANTHROPIC_API_KEY'] ? ['-e', 'ANTHROPIC_API_KEY'] : []),
+      // Forward whichever agent credential this host holds. Passing only
+      // ANTHROPIC_API_KEY would silently drop a subscription token and leave the
+      // container with no credential at all — the session would start, fail to
+      // authenticate, and look like a model error.
+      ...AGENT_AUTH_ENV_VARS.filter((name) => process.env[name]).flatMap((name) => ['-e', name]),
       this.opts.image,
       'claude',
       ...claudeArgs(req, {
@@ -89,7 +102,7 @@ export class ContainerTarget implements ExecutionTarget {
     ];
 
     const child = spawn(engine, args, {
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...authEnv, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

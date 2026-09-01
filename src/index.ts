@@ -15,7 +15,7 @@
 
 import 'dotenv/config';
 
-import { loadConfig } from './config.js';
+import { loadConfig, resolveAgentAuth } from './config.js';
 import { initLogger, getLogger } from './log.js';
 import { openDb, closeDb } from './state/db.js';
 import { Router } from './router/router.js';
@@ -42,6 +42,16 @@ async function main(): Promise<void> {
 
   openDb(config.paths.data);
   reconcile();
+
+  // Which credential the spawned sessions will use. Logged at boot because it is
+  // invisible afterwards — a session authenticating against the wrong account
+  // works perfectly and simply bills somewhere else.
+  const auth = resolveAgentAuth();
+  if (auth.problem) {
+    log.warn({ method: auth.method, detail: auth.detail }, auth.problem);
+  } else {
+    log.info({ method: auth.method }, `agent sessions will authenticate with ${auth.detail}`);
+  }
 
   const router = new Router({ config, secrets, rootDir: process.cwd() });
 

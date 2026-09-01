@@ -92,6 +92,40 @@ Four classes of secret pass through this process: the App private key, installat
 
 `allowManagedHooksOnly` blocks user, project and plugin hooks in favour of admin-controlled ones. Heavy-handed for a prototype, right for production on infrastructure someone else administers.
 
-## Auth choice
+## Agent credential
 
-A Max-plan OAuth token works for personal automation. This pipeline routes *other people's* requests through one person's seat and runs on shared infrastructure — the case that calls for an API key or a Team plan. Use a Console API key with its own billing and spend controls, and settle it before building.
+Two supported options. Which is right depends on who GQuay serves, not on which is easier.
+
+**A Claude subscription** (`claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`). A one-year OAuth token, printed once to the terminal and saved nowhere. Requires Pro, Max, Team or Enterprise. Right when GQuay is working *your* issues on *your* repositories — that is exactly what the token exists for.
+
+**A Console API key** (`ANTHROPIC_API_KEY`). Its own billing and spend controls. Right when GQuay serves a team: it routes other people's requests through one identity on shared infrastructure, and a per-seat subscription is not built to sit behind that.
+
+### The precedence trap
+
+Claude Code resolves credentials in a fixed order, first match wins:
+
+```
+1. cloud provider          CLAUDE_CODE_USE_BEDROCK / _VERTEX / _FOUNDRY
+2. ANTHROPIC_AUTH_TOKEN    an LLM-gateway bearer — NOT a subscription token
+3. ANTHROPIC_API_KEY       Console billing
+4. apiKeyHelper
+5. CLAUDE_CODE_OAUTH_TOKEN the subscription token
+6. Anthropic profile / federation
+7. the interactive /login credential
+```
+
+**An API key outranks a subscription token**, and under `-p` it is used whenever present, without a prompt. So a leftover `ANTHROPIC_API_KEY` in the Router's environment silently bills every session to the Console org while the subscription token sits unused — no error, no warning, and nothing visible from the outside except the invoice.
+
+An empty `ANTHROPIC_API_KEY=""` still wins its slot and authenticates with an empty key. It has to be genuinely unset.
+
+`resolveAgentAuth()` in `src/config.ts` implements this ordering. `gquay doctor` reports which credential sessions will actually use, and the Router logs it at boot — because it is otherwise invisible: a session authenticating against the wrong account works perfectly and simply bills somewhere else.
+
+### Two things the subscription token cannot do
+
+It can only make model requests. Remote Control sessions and claude.ai connectors are unavailable. Neither matters here — GQuay's MCP servers are configured locally and locally-configured servers still work.
+
+It does **not** work in bare mode. `--bare` does not read `CLAUDE_CODE_OAUTH_TOKEN`. GQuay never passes `--bare` and must not start: bare mode also skips the hook and MCP discovery that the park loop, the merge gate and the comms ceiling are built on. The reasoning is pinned in a comment above `claudeArgs()` so it survives the next person who reads that `--bare` is recommended for scripted calls.
+
+### It expires
+
+The token lasts one year and does not slide with use. Put the expiry in a calendar; a Router that stops authenticating twelve months from now, with no code change to blame, is a genuinely hard afternoon.

@@ -162,6 +162,8 @@ export type RoutingRule = z.infer<typeof RoutingRuleSchema>;
  */
 export interface Secrets {
   anthropicApiKey?: string;
+  /** Long-lived OAuth token from `claude setup-token`, backed by a Claude subscription. */
+  claudeCodeOAuthToken?: string;
   githubAppPrivateKey?: string;
   githubWebhookSecret: string;
   hookBusToken: string;
@@ -243,6 +245,7 @@ export function loadConfig(configPath?: string): LoadedConfig {
   const keyPath = config.github.private_key_path;
   const secrets: Secrets = {
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+    claudeCodeOAuthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN,
     githubAppPrivateKey:
       keyPath && existsSync(abs(rootDir, keyPath))
         ? readFileSync(abs(rootDir, keyPath), 'utf8')
@@ -301,3 +304,102 @@ export function getRootDir(): string {
   if (!loaded) throw new Error('loadConfig() has not run yet');
   return loaded.rootDir;
 }
+
+// ── Agent authentication ──────────────────────────────────────────────────────
+
+export type AgentAuthMethod = 'api_key' | 'subscription' | 'cloud_provider' | 'none';
+
+export interface AgentAuth {
+  method: AgentAuthMethod;
+  /** Set when the configuration is self-defeating rather than merely absent. */
+  problem?: string;
+  detail: string;
+}
+
+/**
+ * Which credential the spawned `claude` sessions will actually authenticate with.
+ *
+ * This is Claude Code's precedence, not the API SDK's, and the two differ. Claude
+ * Code resolves, first match wins:
+ *
+ *   1. cloud provider (CLAUDE_CODE_USE_BEDROCK / _VERTEX / _FOUNDRY)
+ *   2. ANTHROPIC_AUTH_TOKEN      (an LLM-gateway bearer, not a subscription token)
+ *   3. ANTHROPIC_API_KEY         (Console billing)
+ *   4. apiKeyHelper
+ *   5. CLAUDE_CODE_OAUTH_TOKEN   (`claude setup-token`, subscription-backed)
+ *   6. Anthropic profile / federation
+ *   7. the interactive `/login` credential
+ *
+ * The ordering is the trap this function exists to catch: **an API key outranks a
+ * subscription token**, and under `-p` it is used whenever present without a
+ * prompt. So a leftover `ANTHROPIC_API_KEY` in the Router's environment silently
+ * bills every session to the Console org instead of the subscription — with no
+ * error, and no way to tell from the outside except the invoice.
+ */
+export function resolveAgentAuth(env: NodeJS.ProcessEnv = process.env): AgentAuth {
+  const apiKey = env['ANTHROPIC_API_KEY'];
+  const oauth = env['CLAUDE_CODE_OAUTH_TOKEN'];
+  const gateway = env['ANTHROPIC_AUTH_TOKEN'];
+  const cloud =
+    env['CLAUDE_CODE_USE_BEDROCK'] ?? env['CLAUDE_CODE_USE_VERTEX'] ?? env['CLAUDE_CODE_USE_FOUNDRY'];
+
+  if (cloud) {
+    return { method: 'cloud_provider', detail: 'a cloud provider (Bedrock/Vertex/Foundry)' };
+  }
+
+  if (gateway) {
+    return {
+      method: 'api_key',
+      detail: 'ANTHROPIC_AUTH_TOKEN (an LLM-gateway bearer)',
+      ...(oauth
+        ? {
+            problem:
+              'Both ANTHROPIC_AUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN are set. The gateway ' +
+              'bearer outranks the subscription token, so sessions will NOT use your ' +
+              'subscription. Unset ANTHROPIC_AUTH_TOKEN if that is not what you want.',
+          }
+        : {}),
+    };
+  }
+
+  if (apiKey) {
+    return {
+      method: 'api_key',
+      detail: 'ANTHROPIC_API_KEY (Console billing)',
+      ...(oauth
+        ? {
+            problem:
+              'Both ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN are set. The API key ' +
+              'outranks the subscription token and is used unconditionally under -p, so ' +
+              'every session bills to the Console org and your subscription token is ignored. ' +
+              'Unset ANTHROPIC_API_KEY — an empty string still wins its slot, so it must be ' +
+              'genuinely unset.',
+          }
+        : {}),
+    };
+  }
+
+  if (oauth) {
+    return { method: 'subscription', detail: 'CLAUDE_CODE_OAUTH_TOKEN (Claude subscription)' };
+  }
+
+  return {
+    method: 'none',
+    detail: 'nothing in the environment',
+    problem:
+      'No agent credential is set. Sessions will fall back to whatever interactive login ' +
+      'exists on this host, which is not something a service should depend on. Set ' +
+      'CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY.',
+  };
+}
+
+/** Env vars a spawned session needs, so container and dispatch targets forward them. */
+export const AGENT_AUTH_ENV_VARS = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+  'CLAUDE_CODE_USE_FOUNDRY',
+] as const;

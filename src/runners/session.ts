@@ -125,7 +125,18 @@ function renderTemplate(template: string, vars: Record<string, string>): string 
   });
 }
 
-/** Build the CLI argv for a Claude Code session. Shared by process and container. */
+/**
+ * Build the CLI argv for a Claude Code session. Shared by process and container.
+ *
+ * **Never add `--bare` here.** It is otherwise attractive — it skips discovery of
+ * hooks, plugins, MCP servers and CLAUDE.md, and the docs recommend it for
+ * scripted calls — but it would break GQuay twice over. Bare mode does not read
+ * `CLAUDE_CODE_OAUTH_TOKEN`, so a subscription-authenticated deployment would
+ * stop authenticating; and it skips the hook and MCP discovery that the park
+ * loop, the merge gate and the comms ceiling are all built on. The hooks and MCP
+ * servers here are passed explicitly via --settings and --mcp-config, so the
+ * startup cost bare mode saves is small and the blast radius is not.
+ */
 export function claudeArgs(req: SpawnRequest, paths: SessionPaths): string[] {
   const args: string[] = [
     '--print',
