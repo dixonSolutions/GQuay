@@ -102,27 +102,37 @@ Tests that open a database use `mkdtempSync` and clean up in `after()`. `GQUAY_L
 
 ---
 
-## Running it end to end locally
-
-The full loop can be exercised without touching github.com. Stand up a mock that answers the permission check and the token endpoint, point `github.api_base` at it, and drive a signed webhook while an MCP client is parked in `await_events`.
+## The end-to-end test
 
 ```bash
-cp router.example.yml router.yml   # set api_base to your mock, ports to something free
-cp .env.example .env && ./scripts/gen-secrets.sh >> .env
-npm run build && node dist/index.js
+npm run build && npm run test:e2e
 ```
 
-Then, from a client holding a valid session bearer:
+`test/e2e/park-and-wake.mjs` is the only test that covers the whole delivery path:
 
 ```
-connected
-tools: ask, await_events, check_conflict, list_channels, post, reply, work_item_status
-parking in await_events (timeout 30s)…
-  webhook delivered (HTTP 202) at +1893ms
-await_events returned after 1990ms   timed_out: false   events: 1
+HMAC-verified webhook -> dedupe -> routing table -> permission check
+  -> event queue -> doorbell -> parked MCP call returns -> framed output
 ```
 
-That is the design's central claim, and it is worth re-checking after any change to `parking.ts`, `server.ts` or the `Stop` hook.
+Every one of those is a place the loop can come apart without a unit test noticing. `parking.test.ts` exercises the ParkingLot in isolation; `webhook.test.ts` exercises signature verification in isolation. Neither would catch the two being wired together wrongly.
+
+It is self-contained — free ports from the OS, a throwaway RSA key, a temporary `router.yml`, a mock GitHub, the Router booted from `dist/`, all cleaned up afterwards. No network, no GitHub App, no public URL. It runs in CI after the build.
+
+```
+  ✓ parked call returned
+  ✓ exactly one event delivered
+  ✓ the comment body survived the round trip
+  ✓ the author's real permission level is attached
+  ✓ framed output fences the untrusted body
+  ✓ a bad signature is rejected (401)
+  ✓ a replayed delivery id is deduped
+  ✓ the merge gate denies without an approval
+
+  parked call woken in 1435ms
+```
+
+It has been mutation-checked: removing `parking.notify()` from the Router makes it fail rather than pass slowly. Re-run it after any change to `parking.ts`, `server.ts`, `router.ts` or the `Stop` hook — those four are the loop.
 
 ---
 

@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "test": "GQUAY_LOG_LEVEL=silent node --import tsx --test test/*.test.ts",
+    "test:e2e": "node test/e2e/park-and-wake.mjs",
     "check:docs": "node scripts/check-docs.mjs"
   },
   "dependencies": {

@@ -39,6 +39,13 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The one test that covers the whole delivery path: HMAC-verified webhook
+      # -> dedupe -> routing table -> permission check -> queue -> doorbell ->
+      # parked MCP call returns. Unit tests cover each piece in isolation and
+      # none of them would notice the loop coming apart between the pieces.
+      - name: End-to-end
+        run: npm run test:e2e
+
       # Reference docs drift silently — nothing breaks, they just quietly stop
       # being true. This checks that links resolve and that everything the code
       # enumerates is documented somewhere.
