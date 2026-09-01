@@ -1,0 +1,58 @@
+# GQuay, minimal.
+#
+# Everything optional is off. What remains is steps 1–3 of the build order:
+# webhook -> spawn -> comment, the registry and the linking rule, and the merge
+# gate. That is a working system.
+#
+# What this still requires, and the Action does not:
+#   - a host that stays up
+#   - a public HTTPS endpoint for the webhook
+#   - a GitHub App you created yourself
+#
+# If you do not need conversation continuity across comments, use
+# examples/minimal-action/ instead. See docs/00-start-smaller.md.
+
+public_url: https://gquay.example.com
+
+server:
+  port: 8080
+  hook_bus_port: 8787
+
+github:
+  app_id: "REPLACE-ME"
+  private_key_path: ./gquay-app.private-key.pem
+  # Start with one repository. Widen it once you trust the thing.
+  allowed_repos:
+    - "your-org/your-repo"
+
+runner:
+  default: local
+  # One session at a time while you are watching it. Raise this later.
+  max_concurrent_total: 1
+  targets:
+    local:
+      kind: process
+      max_concurrent: 1
+
+# No routing rules — everything falls through to runner.default.
+
+idle:
+  # Park quickly while you are still watching, so a forgotten session does not
+  # hold a process overnight.
+  park_timeout_seconds: 300
+  park_after_hours: 4
+
+merge:
+  # Keep this. It is the cheapest safety in the system, and the point at which
+  # adding it later means auditing what the agent already merged.
+  approval_ttl_minutes: 15
+  approval_phrase: "@gquay merge"
+
+coordination:
+  # Only meaningful with concurrent sessions, which max_concurrent: 1 prevents.
+  on_conflict: proceed
+
+teams:
+  # Off. Turn it on when you actually want to be interrupted somewhere other
+  # than GitHub. Every notification is a row in .github/gquay.yml when you do.
+  enabled: false

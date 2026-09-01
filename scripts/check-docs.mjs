@@ -16,6 +16,7 @@
  */
 
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 
 let failures = 0;
@@ -132,6 +133,33 @@ for (const file of readdirSync('scripts/setup').filter((f) => f.endsWith('.sh') 
   }
 }
 
+// ── 4. Referenced files are actually in the repository ────────────────────────
+//
+// An unanchored .gitignore pattern once excluded examples/minimal-router/router.yml
+// while leaving it present locally, so every local check passed and a fresh
+// clone had a broken `./setup.sh router`. Nothing catches that except asking
+// git what it actually tracks.
+
+const tracked = new Set(
+  execSync('git ls-files', { encoding: 'utf8' }).split('\n').filter(Boolean),
+);
+
+const referenced = [
+  'examples/minimal-router/router.yml',
+  'examples/minimal-action/claude.yml',
+  'examples/minimal-action/label-to-pr.yml',
+  'router.example.yml',
+  '.env.example',
+  'runner/settings.json',
+  'gquay.service',
+  'gquay-worker.service',
+];
+
+for (const file of referenced) {
+  if (!existsSync(file)) fail(`${file} is referenced by the setup scripts but does not exist`);
+  else if (!tracked.has(file)) fail(`${file} exists but is not tracked by git — a fresh clone will not have it`);
+}
+
 // ── Result ────────────────────────────────────────────────────────────────────
 
 if (failures > 0) {
@@ -141,5 +169,5 @@ if (failures > 0) {
 console.log(
   `Docs OK — ${links} internal links resolve, ` +
     `${tools.length} tools, ${capabilities.length} capabilities, ${declared.length} setup ` +
-    `profiles and every endpoint are documented.`,
+    `profiles, ${referenced.length} referenced files tracked, and every endpoint documented.`,
 );

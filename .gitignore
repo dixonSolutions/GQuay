@@ -5,8 +5,11 @@
 *.pem
 *.key
 
-# Host config that carries credentials and private paths
-router.yml
+# Host config that carries credentials and private paths.
+# Anchored with a leading slash: an unanchored `router.yml` matches the file at
+# ANY depth, which silently excluded examples/minimal-router/router.yml from the
+# repository — a file the setup script copies from.
+/router.yml
 !router.example.yml
 
 # Node
