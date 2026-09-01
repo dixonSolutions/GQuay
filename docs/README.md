@@ -1,6 +1,14 @@
 # GQuay documentation
 
-Start with [01 — Architecture](01-architecture.md) if you want to understand the system, or [02 — Deployment](02-deployment.md) if you want to run it.
+**Start with [00 — Start smaller](00-start-smaller.md).** It answers whether you need the Router at all — for a lot of use cases you do not, and the official GitHub Action is a better fit.
+
+After that: [01 — Architecture](01-architecture.md) to understand the system, or [02 — Deployment](02-deployment.md) to run it.
+
+## Deciding
+
+| | |
+|---|---|
+| **[00 — Start smaller](00-start-smaller.md)** | The GitHub Action versus the Router, what each can and cannot do, and the single question that decides between them |
 
 ## Understanding it
 
@@ -71,6 +79,9 @@ The REST API lists Actions secrets without revealing their values, by design —
 
 **Why does Teams only go one way?**
 Posting to Teams needs delegated, user-context Graph permissions that an unattended agent does not have. And you already have a perfectly good inbound channel: GitHub comments, which arrive as webhooks you are handling anyway. [07](07-teams.md)
+
+**Do I need the Router just to get an agent to open a pull request?**
+No. Use the official GitHub Action — no host, no public URL, no database. The Router earns its keep only when issues turn into multi-round conversations. [00](00-start-smaller.md)
 
 **Can two agents work the same file?**
 They have separate worktrees, so they cannot overwrite each other. Contradictory work is handled by agent-locks claims, checked before spawn and enforced by a `PreToolUse` hook. [01](01-architecture.md#coordination-between-agents)

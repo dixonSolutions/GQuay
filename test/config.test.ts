@@ -230,3 +230,22 @@ test('every agent credential var is forwarded to container targets', async () =>
     );
   }
 });
+
+test('the minimal example router.yml loads through the real schema', () => {
+  // docs/00-start-smaller.md points people at this file as a working starting
+  // point. If it stops validating, that advice silently becomes wrong.
+  const saved = { ...process.env };
+  process.env['GITHUB_WEBHOOK_SECRET'] = 'x';
+  process.env['HOOK_BUS_TOKEN'] = 'y';
+  try {
+    const { config } = loadConfig('examples/minimal-router/router.yml');
+    assert.equal(config.teams.enabled, false, 'Teams stays off in the minimal profile');
+    assert.equal(config.runner.max_concurrent_total, 1);
+    assert.deepEqual(Object.keys(config.runner.targets), ['local']);
+    // The merge gate must survive every attempt to simplify — adding it later
+    // means auditing what the agent already merged.
+    assert.equal(config.merge.approval_phrase, '@gquay merge');
+  } finally {
+    process.env = saved;
+  }
+});

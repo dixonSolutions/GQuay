@@ -130,6 +130,14 @@ If nothing is running when a comment arrives, step 9 becomes `claude --resume <s
 
 ---
 
+## Do you need this?
+
+Probably not, at first. **If you want an agent that reads an issue and opens a pull request, use the [official GitHub Action](https://github.com/anthropics/claude-code-action)** — fifteen lines of YAML, no server, no public URL, no database. Two ready-to-use workflows are in [`examples/minimal-action/`](examples/minimal-action).
+
+GQuay's machinery buys one thing the Action cannot give you: **an agent that stays alive between comments with its context window intact**, owning an issue and the PR it produced as one conversation. If your issues get resolved in one pass, that is worth nothing and the Action is the correct architecture.
+
+[docs/00-start-smaller.md](docs/00-start-smaller.md) has the honest comparison, row by row, and the point at which moving up is justified.
+
 ## Quick start
 
 ```bash
@@ -359,6 +367,7 @@ Start at **[docs/](docs/)** for the full index.
 
 | | |
 |---|---|
+| [00 — Start smaller](docs/00-start-smaller.md) | Whether you need the Router at all, and what the Action gives you instead |
 | [01 — Architecture](docs/01-architecture.md) | Components, the parking mechanism, the routing table, what is deliberately not used |
 | [02 — Deployment](docs/02-deployment.md) | GitHub App, permissions, TLS, systemd, first webhook |
 | [03 — Execution targets](docs/03-execution-targets.md) | process, dispatch, container, cloud — capabilities and limits |
